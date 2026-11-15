@@ -14,6 +14,7 @@ import {
 } from '@angular/core';
 import { Subscription, catchError, from, mergeMap, of, toArray } from 'rxjs';
 import {
+  HistorialAnualResponse,
   HotspotFeature,
   IncendiosQueryParams,
   ResumenCalendario,
@@ -42,6 +43,7 @@ interface ListRow {
 })
 export class TimelineCalendarComponent implements OnDestroy {
   readonly i18n = inject(I18nService);
+  protected readonly Math = Math;
   private readonly csvExport = inject(CsvExportService);
   private readonly api = inject(IncendiosApiService);
   private readonly mapbox = inject(MapboxService);
@@ -58,6 +60,9 @@ export class TimelineCalendarComponent implements OnDestroy {
   readonly visibleFeatures = input<HotspotFeature[]>([]);
   readonly monthTruncated = input<boolean>(false);
   readonly usingDefaultFilters = input<boolean>(true);
+  readonly historialAnual = input<HistorialAnualResponse | null>(null);
+  readonly loadingHistorial = input<boolean>(false);
+  readonly areaLabel = input<string>('Global');
 
   readonly selectYear = output<number>();
   readonly selectMonth = output<number>();
@@ -67,6 +72,7 @@ export class TimelineCalendarComponent implements OnDestroy {
   readonly goPeak = output<void>();
   readonly exportCsv = output<void>();
   readonly exitTimeline = output<void>();
+  readonly requestHistoryRefresh = output<void>();
   readonly notifyToast = output<{ message: string; isError?: boolean }>();
 
   @ViewChild('yearList') yearList?: ElementRef<HTMLElement>;
@@ -75,6 +81,7 @@ export class TimelineCalendarComponent implements OnDestroy {
   @ViewChild('askDlg') askDlg?: ElementRef<HTMLDialogElement>;
   @ViewChild('listDlg') listDlg?: ElementRef<HTMLDialogElement>;
   @ViewChild('dlDlg') dlDlg?: ElementRef<HTMLDialogElement>;
+  @ViewChild('histDlg') histDlg?: ElementRef<HTMLDialogElement>;
 
   readonly nowUtc = new Date();
   readonly currentYear = Math.max(2026, this.nowUtc.getUTCFullYear());
@@ -131,11 +138,61 @@ export class TimelineCalendarComponent implements OnDestroy {
     new Date(Date.UTC(this.selectedYear(), this.selectedMonth(), 0)).getUTCDate()
   );
 
-  readonly monthlyItems = computed<Array<ResumenMesItem & { intensityNorm: number }>>(() => {
+  private readonly rampStops: ReadonlyArray<[number, number, number, number]> = [
+    [0.0, 56, 189, 248],  // cyan #38BDF8
+    [0.28, 45, 212, 191], // teal #2DD4BF
+    [0.52, 250, 204, 21], // amber #FACC15
+    [0.76, 251, 146, 60], // orange #FB923C
+    [1.0, 239, 68, 68]    // red #EF4444
+  ];
+
+  readonly legendStops = [
+    'rgb(56, 189, 248)',
+    'rgb(45, 212, 191)',
+    'rgb(250, 204, 21)',
+    'rgb(251, 146, 60)',
+    'rgb(239, 68, 68)'
+  ];
+
+  private computeLogNorm(value: number, maxVal: number): number {
+    if (value <= 0 || maxVal <= 0) return 0;
+    return Math.max(0.14, Math.min(1, Math.log1p(value) / Math.log1p(maxVal)));
+  }
+
+  private rampColor(norm: number): string {
+    if (norm <= 0 || !Number.isFinite(norm)) return 'rgba(148, 160, 186, 0.28)';
+    const t = Math.max(0, Math.min(1, norm));
+    for (let i = 1; i < this.rampStops.length; i++) {
+      const [t1, r1, g1, b1] = this.rampStops[i];
+      if (t <= t1 || i === this.rampStops.length - 1) {
+        const [t0, r0, g0, b0] = this.rampStops[i - 1];
+        const f = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
+        const r = Math.round(r0 + (r1 - r0) * f);
+        const g = Math.round(g0 + (g1 - g0) * f);
+        const b = Math.round(b0 + (b1 - b0) * f);
+        return `rgb(${r}, ${g}, ${b})`;
+      }
+    }
+    return 'rgb(239, 68, 68)';
+  }
+
+  readonly monthlyItems = computed<
+    Array<ResumenMesItem & { intensityNorm: number; rampHex: string; isPeakMonth: boolean; isSeasonalPeak: boolean; seasonalAvg: number }>
+  >(() => {
     const items = this.resumen()?.resumenMensual || [];
     const byMonth = new Map<number, ResumenMesItem>();
     items.forEach((it) => byMonth.set(it.mes, it));
     const maxVal = Math.max(1, ...items.map((it) => it.totalFocos));
+    const hist = this.historialAnual();
+    const seasonalTopSet = new Set((hist?.topMesesEstacionales || []).slice(0, 3).map((m) => m.mes));
+    let yearPeakMonth = 0;
+    let yearPeakCount = 0;
+    items.forEach((it) => {
+      if (it.totalFocos > yearPeakCount) {
+        yearPeakCount = it.totalFocos;
+        yearPeakMonth = it.mes;
+      }
+    });
 
     return Array.from({ length: 12 }, (_, idx) => {
       const m = idx + 1;
@@ -146,14 +203,20 @@ export class TimelineCalendarComponent implements OnDestroy {
         intensidadMaxima: 'Sin datos',
         nivelMaximo: 0
       };
+      const norm = this.computeLogNorm(item.totalFocos, maxVal);
+      const seasonalAvg = hist?.porMes?.[idx]?.promedioAnual ?? 0;
       return {
         ...item,
-        intensityNorm: item.totalFocos > 0 ? Math.max(0.12, item.totalFocos / maxVal) : 0
+        intensityNorm: norm,
+        rampHex: this.rampColor(norm),
+        isPeakMonth: m === yearPeakMonth && item.totalFocos > 0,
+        isSeasonalPeak: seasonalTopSet.has(m),
+        seasonalAvg: Math.round(seasonalAvg)
       };
     });
   });
 
-  readonly dailyItems = computed<Array<ResumenDiaItem & { intensityNorm: number }>>(() => {
+  readonly dailyItems = computed<Array<ResumenDiaItem & { intensityNorm: number; rampHex: string }>>(() => {
     const nDays = this.daysInSelectedMonth();
     const y = this.selectedYear();
     const mStr = String(this.selectedMonth()).padStart(2, '0');
@@ -179,6 +242,7 @@ export class TimelineCalendarComponent implements OnDestroy {
       const d = i + 1;
       const existing = byDay.get(d);
       const total = existing?.totalFocos ?? featCounts.get(d) ?? 0;
+      const norm = this.computeLogNorm(total, maxVal);
       return {
         dia: d,
         fecha: existing?.fecha ?? `${y}-${mStr}-${String(d).padStart(2, '0')}`,
@@ -186,9 +250,110 @@ export class TimelineCalendarComponent implements OnDestroy {
         frpMax: existing?.frpMax ?? 0,
         intensidadMaxima: existing?.intensidadMaxima ?? 'Sin datos',
         nivelMaximo: existing?.nivelMaximo ?? 0,
-        intensityNorm: total > 0 ? Math.max(0.15, total / maxVal) : 0
+        intensityNorm: norm,
+        rampHex: this.rampColor(norm)
       };
     });
+  });
+
+  readonly yearPickerItems = computed<
+    Array<{ anio: number; totalFocos: number; intensityNorm: number; rampHex: string; isTopYear: boolean; rank: number; mesPico: number }>
+  >(() => {
+    const hist = this.historialAnual();
+    const byYear = new Map(hist?.porAnio.map((y) => [y.anio, y]) || []);
+    const ranked = (hist?.porAnio || [])
+      .filter((y) => y.totalFocos > 0)
+      .slice()
+      .sort((a, b) => b.totalFocos - a.totalFocos);
+    const rankMap = new Map<number, number>();
+    ranked.forEach((y, idx) => rankMap.set(y.anio, idx + 1));
+    const maxYear = Math.max(1, ...ranked.map((y) => y.totalFocos));
+
+    return this.years.map((anio) => {
+      const item = byYear.get(anio);
+      const total = item?.totalFocos || 0;
+      const norm = this.computeLogNorm(total, maxYear);
+      const rank = rankMap.get(anio) || 0;
+      return {
+        anio,
+        totalFocos: total,
+        intensityNorm: norm,
+        rampHex: this.rampColor(norm),
+        isTopYear: rank > 0 && rank <= 3,
+        rank,
+        mesPico: item?.mesPico || 0
+      };
+    });
+  });
+
+  readonly seasonalMonthCells = computed(() => {
+    const hist = this.historialAnual();
+    const list = hist?.porMes || [];
+    const maxAvg = Math.max(1, ...list.map((m) => m.promedioAnual || 0));
+    return Array.from({ length: 12 }, (_, idx) => {
+      const mNum = idx + 1;
+      const item = list[idx];
+      const avg = item?.promedioAnual || 0;
+      const med = item?.medianaAnual || 0;
+      const norm = this.computeLogNorm(avg, maxAvg);
+      const isTop = (hist?.topMesesEstacionales || []).slice(0, 3).some((tm) => tm.mes === mNum);
+      return {
+        mes: mNum,
+        shortLabel: this.i18n.meses()[idx].slice(0, 3),
+        fullLabel: this.i18n.meses()[idx],
+        promedioAnual: Math.round(avg),
+        medianaAnual: Math.round(med),
+        maxAnual: item?.maxAnual || 0,
+        anioPico: item?.anioPico || 0,
+        totalFocos: item?.totalFocos || 0,
+        intensityNorm: norm,
+        rampHex: this.rampColor(norm),
+        isTopSeason: isTop
+      };
+    });
+  });
+
+  readonly historicalComparison = computed(() => {
+    const hist = this.historialAnual();
+    if (!hist) return null;
+    const selYear = this.selectedYear();
+    const selMonth = this.selectedMonth();
+    const selYearObj = hist.porAnio.find((y) => y.anio === selYear) || null;
+    const rankedYears = hist.porAnio
+      .filter((y) => y.totalFocos > 0)
+      .slice()
+      .sort((a, b) => b.totalFocos - a.totalFocos);
+    const yearRankIdx = rankedYears.findIndex((y) => y.anio === selYear);
+    const yearTotal = selYearObj?.totalFocos || 0;
+    const yearDeltaPct =
+      hist.promedioAnual > 0 && yearTotal > 0
+        ? Math.round(((yearTotal - hist.promedioAnual) / hist.promedioAnual) * 100)
+        : null;
+
+    const monthSeason = hist.porMes[selMonth - 1] || null;
+    const currentMonthTotal =
+      this.dailyItems().reduce((acc, d) => acc + d.totalFocos, 0) ||
+      this.resumen()?.resumenMensual?.[selMonth - 1]?.totalFocos ||
+      selYearObj?.meses?.[selMonth - 1] ||
+      0;
+    const monthBaseline = monthSeason?.medianaAnual || monthSeason?.promedioAnual || 0;
+    const monthDeltaPct =
+      monthBaseline > 0 && currentMonthTotal > 0
+        ? Math.round(((currentMonthTotal - monthBaseline) / monthBaseline) * 100)
+        : null;
+
+    return {
+      yearTotal,
+      yearRank: yearRankIdx >= 0 ? yearRankIdx + 1 : null,
+      yearsTotalWithData: rankedYears.length,
+      yearDeltaPct,
+      monthTotal: currentMonthTotal,
+      monthAvg: Math.round(monthSeason?.promedioAnual || 0),
+      monthMedian: Math.round(monthSeason?.medianaAnual || 0),
+      monthDeltaPct,
+      monthAnioPico: monthSeason?.anioPico || 0,
+      monthMaxAnual: monthSeason?.maxAnual || 0
+    };
   });
 
   readonly sevCounts = computed<Record<SeveridadNivel, number>>(() => {
@@ -565,6 +730,28 @@ export class TimelineCalendarComponent implements OnDestroy {
     }
   }
 
+  openHistoryDialog(): void {
+    this.hidePopovers();
+    this.requestHistoryRefresh.emit();
+    this.histDlg?.nativeElement.showModal();
+  }
+
+  closeHistoryDialog(): void {
+    this.histDlg?.nativeElement.close();
+  }
+
+  jumpToHistoryYear(year: number): void {
+    this.histDlg?.nativeElement.close();
+    this.onPickYear(year);
+  }
+
+  jumpToHistoryMonth(monthNum: number): void {
+    this.histDlg?.nativeElement.close();
+    if (!this.isFutureMonth(monthNum)) {
+      this.onPickMonth(monthNum);
+    }
+  }
+
   closeAskDialog(): void {
     this.askDlg?.nativeElement.close();
   }
@@ -678,15 +865,15 @@ export class TimelineCalendarComponent implements OnDestroy {
     d1 = Math.min(d1, this.todayDay);
 
     const [west, south, east, north] = box;
+    const scope = this.mapbox.areaScope();
+    const scopedPais = scope?.pais;
     const queries: IncendiosQueryParams[] = [];
 
     if (d0 === d1) {
       queries.push({
         fecha: fromStr,
-        north,
-        south,
-        east,
-        west,
+        pais: scopedPais,
+        ...(scope?.isCountry ? {} : { north, south, east, west }),
         limite: 100000,
         compact: 1
       });
@@ -702,10 +889,8 @@ export class TimelineCalendarComponent implements OnDestroy {
         queries.push({
           anioConsulta: y,
           mesConsulta: m,
-          north,
-          south,
-          east,
-          west,
+          pais: scopedPais,
+          ...(scope?.isCountry ? {} : { north, south, east, west }),
           limite: 100000,
           compact: 1
         });

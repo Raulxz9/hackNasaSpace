@@ -120,6 +120,7 @@ export interface ResumenMesItem {
   mes: number;
   totalFocos: number;
   frpMax: number;
+  frpAvg?: number;
   intensidadMaxima: string;
   nivelMaximo: number;
 }
@@ -137,6 +138,7 @@ export interface ResumenCalendario {
   anio: number;
   mes: number | null;
   pais: string;
+  bbox?: { north: number; south: number; east: number; west: number } | null;
   parcial?: boolean;
   resumenMensual: ResumenMesItem[];
   resumenDiario?: ResumenDiaItem[];
@@ -148,7 +150,64 @@ export interface ResumenCalendario {
   nivelMaximoMes?: number;
   distribucionIntensidad?: Record<number, number>;
   medianaHistoricaMes?: number;
+  promedioHistoricoMes?: number;
   aniosDisponiblesMediana?: number;
+}
+
+export interface HistorialAnioItem {
+  anio: number;
+  totalFocos: number;
+  frpMax: number;
+  frpAvg: number;
+  nivelMaximo: number;
+  mesPico: number;
+  mesPicoFocos: number;
+  meses: number[];
+}
+
+export interface HistorialMesEstacionalItem {
+  mes: number;
+  totalFocos: number;
+  aniosConDatos: number;
+  promedioAnual: number;
+  medianaAnual: number;
+  maxAnual: number;
+  anioPico: number;
+}
+
+export interface HistorialTopAnioItem {
+  anio: number;
+  totalFocos: number;
+  frpMax: number;
+  frpAvg: number;
+  mesPico: number;
+  mesPicoFocos: number;
+}
+
+export interface HistorialAnualResponse {
+  desdeAnio: number;
+  hastaAnio: number;
+  pais: string;
+  bbox?: { north: number; south: number; east: number; west: number } | null;
+  parcial: boolean;
+  totalHistorico: number;
+  aniosConDatos: number;
+  promedioAnual: number;
+  medianaAnual: number;
+  anioPico: HistorialTopAnioItem | null;
+  topAnios: HistorialTopAnioItem[];
+  mesPicoEstacional: HistorialMesEstacionalItem | null;
+  topMesesEstacionales: HistorialMesEstacionalItem[];
+  porAnio: HistorialAnioItem[];
+  porMes: HistorialMesEstacionalItem[];
+}
+
+export interface AreaFilterScope {
+  name: string;
+  pais?: string;
+  bbox?: [number, number, number, number] | null;
+  center?: [number, number];
+  isCountry?: boolean;
 }
 
 export interface Filtros {
@@ -210,4 +269,6 @@ export interface GeocodeFeature {
   center: [number, number];
   bbox?: [number, number, number, number];
   place_type?: string[];
+  properties?: { short_code?: string };
+  context?: Array<{ id: string; text: string; short_code?: string }>;
 }

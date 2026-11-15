@@ -32,5 +32,20 @@
 
 <div class="area glass" id="areaChip" [hidden]="!mapbox.areaName()">
   📍 <span id="areaName">{{ mapbox.areaName() }}</span>
+  <button
+    class="area-act"
+    id="areaCsv"
+    [disabled]="downloadingAreaCsv()"
+    [attr.aria-label]="i18n.translate('Descargar CSV de esta búsqueda')"
+    [title]="i18n.translate('Descargar CSV de esta búsqueda')"
+    (click)="downloadAreaCsv.emit()"
+  >{{ downloadingAreaCsv() ? '⏳' : '⬇ CSV' }}</button>
+  <button
+    class="area-act"
+    id="areaHist"
+    [attr.aria-label]="i18n.translate('Historial de incendios (2000–presente)')"
+    [title]="i18n.translate('Historial de incendios (2000–presente)')"
+    (click)="openAreaHistory.emit()"
+  >📊</button>
   <button id="areaX" [attr.aria-label]="i18n.translate('Quitar zona')" (click)="clearArea()">✕</button>
 </div>

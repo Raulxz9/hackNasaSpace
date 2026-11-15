@@ -2,6 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
+const crypto = require('crypto');
 const { promisify } = require('util');
 
 const gzipAsync = promisify(zlib.gzip);
@@ -535,6 +536,82 @@ function escanearCsvResumenGcs(file, onCampos) {
     });
 }
 
+function puntoEnBbox(lat, lon, bbox) {
+    if (!bbox) return true;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+    if (lat < bbox.south || lat > bbox.north) return false;
+    if (bbox.west <= bbox.east) {
+        return lon >= bbox.west && lon <= bbox.east;
+    }
+    // Cruza antimeridiano ±180°
+    return lon >= bbox.west || lon <= bbox.east;
+}
+
+// Lector streaming con filtrado bbox opcional (sin asignar objetos por fila)
+function escanearCsvResumenConCoordsGcs(file, bbox, onCampos) {
+    if (!bbox) return escanearCsvResumenGcs(file, onCampos);
+
+    let headerParsed = false;
+    let iDate = -1;
+    let iFrp = -1;
+    let iLat = -1;
+    let iLon = -1;
+    let maxColIdx = -1;
+
+    return escanearLineasStream(file.createReadStream(), (buf, start, end) => {
+        if (!headerParsed) {
+            headerParsed = true;
+            const line = buf.toString('utf8', start, end);
+            const cols = (line.indexOf('"') !== -1 ? parseCsvLineQuoted(line) : line.split(','))
+                .map(c => c.trim().toLowerCase());
+            iDate = cols.indexOf('datetime');
+            if (iDate === -1) iDate = cols.indexOf('acq_date');
+            iFrp = cols.indexOf('frp');
+            iLat = cols.indexOf('latitude');
+            iLon = cols.indexOf('longitude');
+            maxColIdx = Math.max(iDate, iFrp, iLat, iLon);
+            return;
+        }
+        if (maxColIdx < 0 || iLat < 0 || iLon < 0) return;
+
+        if (buf.subarray(start, end).indexOf(0x22) !== -1) {
+            const cols = parseCsvLineQuoted(buf.toString('utf8', start, end));
+            const lat = parseFloat(cols[iLat]);
+            const lon = parseFloat(cols[iLon]);
+            if (!puntoEnBbox(lat, lon, bbox)) return;
+            onCampos(iDate >= 0 ? cols[iDate] : '', iFrp >= 0 ? cols[iFrp] : '');
+            return;
+        }
+
+        let curCol = 0;
+        let colStart = start;
+        let dateStr = '';
+        let frpStr = '';
+        let latStr = '';
+        let lonStr = '';
+        for (let k = start; k <= end; k++) {
+            if (k === end || buf[k] === 0x2c) {
+                if (curCol === iLat) {
+                    latStr = buf.toString('ascii', colStart, k);
+                } else if (curCol === iLon) {
+                    lonStr = buf.toString('ascii', colStart, k);
+                } else if (curCol === iDate) {
+                    dateStr = buf.toString('ascii', colStart, Math.min(k, colStart + 10));
+                } else if (curCol === iFrp) {
+                    frpStr = buf.toString('ascii', colStart, k);
+                }
+                if (curCol >= maxColIdx) break;
+                curCol++;
+                colStart = k + 1;
+            }
+        }
+        const lat = parseFloat(latStr);
+        const lon = parseFloat(lonStr);
+        if (!puntoEnBbox(lat, lon, bbox)) return;
+        onCampos(dateStr, frpStr);
+    });
+}
+
 // Conteo rápido de filas usando Buffer.indexOf(0x0a) nativo en C++/SIMD
 function contarFilasCsvGcs(file) {
     return new Promise((resolve, reject) => {
@@ -701,6 +778,8 @@ const crearColector = (predicado, limite) => {
 // ---------------------------------------------------------------
 // GCS: archivos del mes / año
 // ---------------------------------------------------------------
+const archivosAnioCache = new Map();
+
 async function listarArchivosMes(anio, mes) {
     try {
         if (gcpConfigError) throw new Error(gcpConfigError);
@@ -725,6 +804,13 @@ async function listarArchivosMes(anio, mes) {
 async function listarArchivosAnioPorMes(anio) {
     try {
         if (gcpConfigError) throw new Error(gcpConfigError);
+        const anioNum = parseInt(anio, 10);
+        const hoyAnio = new Date().getUTCFullYear();
+        const ttl = anioNum < hoyAnio ? 6 * 60 * 60 * 1000 : 2 * 60 * 1000;
+        const cached = archivosAnioCache.get(String(anio));
+        if (cached && Date.now() - cached.ts < ttl) {
+            return cached.porMes;
+        }
         const prefijo = `${anio}_`;
         const [files] = await storage.bucket(BUCKET_NAME).getFiles({ prefix: prefijo });
         const porMes = Array.from({ length: 12 }, () => []);
@@ -738,6 +824,7 @@ async function listarArchivosAnioPorMes(anio) {
             if (normalizar(pais) === 'world') continue;
             porMes[mesIdx].push({ file: f, nombre: f.name, pais });
         }
+        archivosAnioCache.set(String(anio), { ts: Date.now(), porMes });
         return porMes;
     } catch (error) {
         logError(`listarArchivosAnioPorMes(${anio})`, error);
@@ -920,6 +1007,10 @@ async function cargarPaisesFirms() {
                 const nombre = slug.replace(/_/g, ' ');
                 const entry = { codigo, nombre, slug };
                 porCodigo.set(codigo, entry);
+                if (p.iso1A2) {
+                    const iso2 = String(p.iso1A2).toUpperCase();
+                    if (!porCodigo.has(iso2)) porCodigo.set(iso2, entry);
+                }
                 porNombre.set(normalizar(nombre), entry);
                 if (p.nameEn) porNombre.set(normalizar(p.nameEn), entry);
                 if (Array.isArray(p.aliases)) {
@@ -944,10 +1035,10 @@ async function resolverPais(entrada) {
     try {
         const { porNombre, porCodigo } = await cargarPaisesFirms();
         const limpio = String(entrada || '').trim();
-        if (/^[A-Za-z]{3}$/.test(limpio)) {
+        if (/^[A-Za-z]{2,3}$/.test(limpio)) {
             const codigo = limpio.toUpperCase();
             const info = porCodigo.get(codigo);
-            return { codigo, nombre: info ? info.nombre : limpio };
+            return { codigo: info ? info.codigo : codigo, nombre: info ? info.nombre : limpio };
         }
         const info = porNombre.get(normalizar(limpio));
         return { codigo: info ? info.codigo : null, nombre: info ? info.nombre : limpio };
@@ -972,6 +1063,74 @@ async function buscarArchivoPais(archivos, paisEntrada) {
         logError(`buscarArchivoPais(${paisEntrada})`, error);
         return null;
     }
+}
+
+function formatearClaveBbox(bbox) {
+    if (!bbox) return '';
+    return `${bbox.south.toFixed(2)},${bbox.west.toFixed(2)},${bbox.north.toFixed(2)},${bbox.east.toFixed(2)}`;
+}
+
+function construirClaveArea({ paisFiltro, bbox }) {
+    const pKey = paisFiltro ? normalizar(paisFiltro) : '';
+    const bKey = formatearClaveBbox(bbox);
+    if (pKey && bKey) return `${pKey}@${bKey}`;
+    if (pKey) return pKey;
+    if (bKey) return `bbox:${bKey}`;
+    return 'global';
+}
+
+// Estima qué archivos de país en GCS pueden intersectar un bbox para evitar escanear los 190 países
+async function resolverPaisesPorBbox(bbox) {
+    try {
+        if (!bbox) return null;
+        const latSpan = Math.abs(bbox.north - bbox.south);
+        if (latSpan > 45 || bbox.west > bbox.east) return null;
+        const lonSpan = Math.abs(bbox.east - bbox.west);
+        if (lonSpan > 60) return null;
+
+        const countryCoder = await obtenerGeocoderPaises();
+        if (!countryCoder) return null;
+
+        const encontrados = new Map();
+        const pasos = 6;
+        for (let i = 0; i <= pasos; i++) {
+            const lat = bbox.south + ((bbox.north - bbox.south) * i) / pasos;
+            for (let j = 0; j <= pasos; j++) {
+                const lon = bbox.west + ((bbox.east - bbox.west) * j) / pasos;
+                const info = clasificarPaisPorCoordenada(countryCoder, lat, lon);
+                if (info && info.pais) {
+                    encontrados.set(normalizar(info.pais), info.pais);
+                }
+            }
+        }
+        if (encontrados.size > 12) return null;
+        return Array.from(encontrados.values());
+    } catch (error) {
+        logError('resolverPaisesPorBbox', error);
+        return null;
+    }
+}
+
+async function seleccionarArchivosPorArea(archivosMes, paisFiltro, bbox, paisesBbox) {
+    if (!Array.isArray(archivosMes) || archivosMes.length === 0) return [];
+    if (paisFiltro) {
+        const encontrado = await buscarArchivoPais(archivosMes, paisFiltro);
+        return encontrado ? [encontrado] : [];
+    }
+    if (bbox && Array.isArray(paisesBbox)) {
+        if (paisesBbox.length === 0) return [];
+        const vistos = new Set();
+        const resultado = [];
+        for (const pNombre of paisesBbox) {
+            const arch = await buscarArchivoPais(archivosMes, pNombre);
+            if (arch && !vistos.has(arch.nombre)) {
+                vistos.add(arch.nombre);
+                resultado.push(arch);
+            }
+        }
+        return resultado;
+    }
+    return archivosMes;
 }
 
 function invalidarCacheResumenMes(anio, mes) {
@@ -1202,6 +1361,9 @@ async function obtenerMundoPorFechaReciente(fechaObjetivo) {
 const CACHE_MAX = 600;
 const resumenMesCache = new Map();
 const medianaMesCache = new Map();
+const historialAnualCache = new Map();
+const historialAnualPromesas = new Map();
+let precalentandoGlobalPromesa = null;
 const mesIndexandoPromesas = new Map();
 const resumenAnioPromesas = new Map();
 const gcsGuardadosEnSesion = new Set();
@@ -1844,11 +2006,11 @@ async function cargarResumenAnioDesdeGcs(anioStr) {
     return doc;
 }
 
-async function calcularResumenMes({ anioStr, mesStr, archivosMes, paisFiltro, incluirDias, fechaHoy }) {
+async function calcularResumenMes({ anioStr, mesStr, archivosMes, paisFiltro, bbox = null, paisesBbox = null, incluirDias, fechaHoy }) {
     try {
         const esMesActual = `${anioStr}-${mesStr}` === fechaHoy.slice(0, 7);
-        const paisKey = paisFiltro ? normalizar(paisFiltro) : 'global';
-        const cacheKey = `${anioStr}-${mesStr}:${paisKey}`;
+        const areaKey = construirClaveArea({ paisFiltro, bbox });
+        const cacheKey = `${anioStr}-${mesStr}:${areaKey}`;
         const ttl = esMesActual ? 5 * 60 * 1000 : 6 * 60 * 60 * 1000;
 
         const cached = getCached(resumenMesCache, cacheKey, ttl);
@@ -1857,7 +2019,7 @@ async function calcularResumenMes({ anioStr, mesStr, archivosMes, paisFiltro, in
         }
 
         // Si es un mes histórico global, verifica primero el índice local de /tmp o créalo una sola vez
-        if (!esMesActual && !paisFiltro && archivosMes && archivosMes.length > 0 && incluirDias) {
+        if (!esMesActual && !paisFiltro && !bbox && archivosMes && archivosMes.length > 0 && incluirDias) {
             try {
                 const { meta } = await obtenerMesIndexado(anioStr, mesStr, archivosMes);
                 if (meta) {
@@ -1869,15 +2031,13 @@ async function calcularResumenMes({ anioStr, mesStr, archivosMes, paisFiltro, in
             }
         }
 
-        let archivosObjetivo = archivosMes;
-        if (paisFiltro) {
-            const encontrado = await buscarArchivoPais(archivosMes, paisFiltro);
-            archivosObjetivo = encontrado ? [encontrado] : [];
-        }
+        let archivosObjetivo = await seleccionarArchivosPorArea(archivosMes, paisFiltro, bbox, paisesBbox);
         archivosObjetivo = ordenarPorTamanoDesc(archivosObjetivo);
 
         let totalFocos = 0;
         let frpMax = 0;
+        let sumFrp = 0;
+        let frpValidCount = 0;
         let nivelMax = 0;
         const distribucion = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
         const diasMap = incluirDias ? new Map() : null;
@@ -1887,7 +2047,11 @@ async function calcularResumenMes({ anioStr, mesStr, archivosMes, paisFiltro, in
             totalFocos++;
             const frp = parseFloat(frpRaw);
             const nivel = clasificarNivelFrp(frp);
-            if (Number.isFinite(frp) && frp > frpMax) frpMax = frp;
+            if (Number.isFinite(frp)) {
+                if (frp > frpMax) frpMax = frp;
+                sumFrp += frp;
+                frpValidCount++;
+            }
             if (nivel > nivelMax) nivelMax = nivel;
             distribucion[nivel]++;
 
@@ -1911,6 +2075,7 @@ async function calcularResumenMes({ anioStr, mesStr, archivosMes, paisFiltro, in
             // Necesitamos claves de hoy para deduplicar con NASA en vivo
             await conLimite(archivosObjetivo, CONCURRENCIA_GCS, async (a) => {
                 await leerCsvGcs(a.file, (row) => {
+                    if (bbox && !puntoEnBbox(parseFloat(row.latitude), parseFloat(row.longitude), bbox)) return;
                     const f = fechaDe(row);
                     const clave = f === fechaHoy ? claveRegistro(row) : null;
                     acumular(f, row.frp, clave);
@@ -1919,6 +2084,7 @@ async function calcularResumenMes({ anioStr, mesStr, archivosMes, paisFiltro, in
 
             const vivos = await obtenerMundoHoy(fechaHoy);
             vivos.forEach((r) => {
+                if (bbox && !puntoEnBbox(parseFloat(r.latitude), parseFloat(r.longitude), bbox)) return;
                 if (!clavesHoy.has(claveRegistro(r))) {
                     acumular(fechaDe(r), r.frp);
                 }
@@ -1926,17 +2092,20 @@ async function calcularResumenMes({ anioStr, mesStr, archivosMes, paisFiltro, in
         } else if (esMesActual && paisFiltro) {
             const sincronizados = await sincronizarPais(fechaHoy, paisFiltro, archivosMes);
             if (sincronizados) {
-                sincronizados.forEach((r) => acumular(fechaDe(r), r.frp));
+                sincronizados.forEach((r) => {
+                    if (bbox && !puntoEnBbox(parseFloat(r.latitude), parseFloat(r.longitude), bbox)) return;
+                    acumular(fechaDe(r), r.frp);
+                });
             } else {
                 await conLimite(archivosObjetivo, CONCURRENCIA_GCS, async (a) => {
-                    await escanearCsvResumenGcs(a.file, (fechaStr, frpRaw) => {
+                    await escanearCsvResumenConCoordsGcs(a.file, bbox, (fechaStr, frpRaw) => {
                         acumular(String(fechaStr || '').slice(0, 10), frpRaw);
                     });
                 });
             }
         } else {
             await conLimite(archivosObjetivo, CONCURRENCIA_GCS, async (a) => {
-                await escanearCsvResumenGcs(a.file, (fechaStr, frpRaw) => {
+                await escanearCsvResumenConCoordsGcs(a.file, bbox, (fechaStr, frpRaw) => {
                     acumular(String(fechaStr || '').slice(0, 10), frpRaw);
                 });
             });
@@ -1946,6 +2115,7 @@ async function calcularResumenMes({ anioStr, mesStr, archivosMes, paisFiltro, in
             mes: parseInt(mesStr, 10),
             totalFocos,
             frpMax: totalFocos > 0 ? Math.round(frpMax * 100) / 100 : 0,
+            frpAvg: frpValidCount > 0 ? Math.round((sumFrp / frpValidCount) * 100) / 100 : 0,
             nivelMaximo: totalFocos > 0 ? nivelMax : 0,
             intensidadMaxima: totalFocos > 0 ? nombreIntensidad(nivelMax) : 'Sin datos',
             distribucion,
@@ -1968,15 +2138,22 @@ function calcularMediana(valores) {
     return Math.round(((ordenados[mitad - 1] + ordenados[mitad]) / 2) * 100) / 100;
 }
 
-async function calcularMedianaHistoricaMes({ mesStr, paisFiltro, anioActualMax, mesActualDatos }) {
+function calcularPromedio(valores) {
+    if (!valores.length) return 0;
+    const suma = valores.reduce((acc, v) => acc + v, 0);
+    return Math.round((suma / valores.length) * 100) / 100;
+}
+
+async function calcularMedianaHistoricaMes({ mesStr, paisFiltro, bbox = null, paisesBbox = null, anioActualMax, mesActualDatos }) {
     try {
-        const paisKey = paisFiltro ? normalizar(paisFiltro) : 'global';
-        const cacheKey = `${mesStr}:${paisKey}`;
+        const esGlobalPuro = !paisFiltro && !bbox;
+        const areaKey = construirClaveArea({ paisFiltro, bbox });
+        const cacheKey = `${mesStr}:${areaKey}`;
         const cached = getCached(medianaMesCache, cacheKey, 6 * 60 * 60 * 1000);
         if (cached) return cached;
 
         const mesIdx = parseInt(mesStr, 10) - 1;
-        const medianaGcsKey = !paisFiltro ? `${GCS_CACHE_PREFIX}/mediana_${mesStr}.json` : null;
+        const medianaGcsKey = esGlobalPuro ? `${GCS_CACHE_PREFIX}/mediana_${mesStr}.json` : null;
         let porAnioPersistido = {};
 
         // 1. Revisa si la mediana histórica ya existe persistida en GCS
@@ -1994,7 +2171,11 @@ async function calcularMedianaHistoricaMes({ mesStr, paisFiltro, anioActualMax, 
                     } else if (porAnioPersistido[anioActualMax] > 0) {
                         valores.push(Number(porAnioPersistido[anioActualMax]));
                     }
-                    const resultado = { mediana: calcularMediana(valores), aniosAnalizados: valores.length };
+                    const resultado = {
+                        mediana: calcularMediana(valores),
+                        promedio: calcularPromedio(valores),
+                        aniosAnalizados: valores.length
+                    };
                     setCached(medianaMesCache, cacheKey, resultado);
                     return resultado;
                 }
@@ -2005,7 +2186,7 @@ async function calcularMedianaHistoricaMes({ mesStr, paisFiltro, anioActualMax, 
         for (let y = ANIO_MINIMO_GCS; y <= anioActualMax; y++) anios.push(y);
 
         // 2. Si es global, revisa primero resúmenes anuales ya guardados en GCS (~150 ms)
-        if (!paisFiltro) {
+        if (esGlobalPuro) {
             const faltantesResumen = anios.filter((y) => y < anioActualMax && porAnioPersistido[String(y)] === undefined);
             await conLimite(faltantesResumen, 12, async (y) => {
                 const resumenDoc = await cargarResumenAnioDesdeGcs(String(y));
@@ -2018,10 +2199,10 @@ async function calcularMedianaHistoricaMes({ mesStr, paisFiltro, anioActualMax, 
         // 3. Lista en paralelo solo los años que aún falten contar
         const aniosPorListar = anios.filter((y) => {
             if (mesActualDatos && y === mesActualDatos.anio) return false;
-            if (!paisFiltro && porAnioPersistido[String(y)] !== undefined) return false;
-            const hit = getCached(resumenMesCache, `${y}-${mesStr}:${paisKey}`, 6 * 60 * 60 * 1000);
+            if (esGlobalPuro && porAnioPersistido[String(y)] !== undefined) return false;
+            const hit = getCached(resumenMesCache, `${y}-${mesStr}:${areaKey}`, 6 * 60 * 60 * 1000);
             if (hit) {
-                if (!paisFiltro && y < anioActualMax) porAnioPersistido[String(y)] = hit.totalFocos;
+                if (esGlobalPuro && y < anioActualMax) porAnioPersistido[String(y)] = hit.totalFocos;
                 return false;
             }
             return true;
@@ -2033,7 +2214,7 @@ async function calcularMedianaHistoricaMes({ mesStr, paisFiltro, anioActualMax, 
                 const archivos = await listarArchivosMes(String(y), mesStr);
                 if (archivos.length > 0) {
                     archivosPorAnio.set(y, archivos);
-                } else if (!paisFiltro && y < anioActualMax) {
+                } else if (esGlobalPuro && y < anioActualMax) {
                     porAnioPersistido[String(y)] = 0;
                 }
             });
@@ -2044,37 +2225,44 @@ async function calcularMedianaHistoricaMes({ mesStr, paisFiltro, anioActualMax, 
         let presupuestoAgotado = false;
         const aniosPendientesConteo = Array.from(archivosPorAnio.keys()).sort((a, b) => a - b);
 
-        // Ejecuta conteo SIMD de años pendientes en lotes paralelos de 3 años
+        // Ejecuta conteo de años pendientes en lotes paralelos
         await conLimite(aniosPendientesConteo, 3, async (y) => {
             if (presupuestoAgotado) return;
-            if (Date.now() - inicio > PRESUPUESTO_MS && Object.keys(porAnioPersistido).length >= 5) {
+            if (Date.now() - inicio > PRESUPUESTO_MS && (Object.keys(porAnioPersistido).length >= 5 || !esGlobalPuro)) {
                 presupuestoAgotado = true;
                 return;
             }
             const archivos = archivosPorAnio.get(y);
-            let objetivo = archivos;
-            if (paisFiltro) {
-                const encontrado = await buscarArchivoPais(archivos, paisFiltro);
-                objetivo = encontrado ? [encontrado] : [];
-            }
+            const objetivo = await seleccionarArchivosPorArea(archivos, paisFiltro, bbox, paisesBbox);
             if (!objetivo.length) {
-                if (!paisFiltro && y < anioActualMax) porAnioPersistido[String(y)] = 0;
+                if (esGlobalPuro && y < anioActualMax) porAnioPersistido[String(y)] = 0;
+                else setCached(resumenMesCache, `${y}-${mesStr}:${areaKey}:countOnly`, 0);
                 return;
             }
 
             let totalAnio = 0;
-            await conLimite(ordenarPorTamanoDesc(objetivo), CONCURRENCIA_GCS_MEDIANA, async (a) => {
-                totalAnio += await contarFilasCsvGcs(a.file);
-            });
-            if (!paisFiltro && y < anioActualMax) {
+            if (bbox) {
+                await conLimite(ordenarPorTamanoDesc(objetivo), CONCURRENCIA_GCS_MEDIANA, async (a) => {
+                    let count = 0;
+                    await escanearCsvResumenConCoordsGcs(a.file, bbox, () => {
+                        count++;
+                    });
+                    totalAnio += count;
+                });
+            } else {
+                await conLimite(ordenarPorTamanoDesc(objetivo), CONCURRENCIA_GCS_MEDIANA, async (a) => {
+                    totalAnio += await contarFilasCsvGcs(a.file);
+                });
+            }
+            if (esGlobalPuro && y < anioActualMax) {
                 porAnioPersistido[String(y)] = totalAnio;
             } else {
-                setCached(resumenMesCache, `${y}-${mesStr}:${paisKey}:countOnly`, totalAnio);
+                setCached(resumenMesCache, `${y}-${mesStr}:${areaKey}:countOnly`, totalAnio);
             }
         });
 
         if (presupuestoAgotado) {
-            log('WARN', `Presupuesto de mediana alcanzado para mes ${mesStr} (${Object.keys(porAnioPersistido).length} años acumulados)`);
+            log('WARN', `Presupuesto de mediana alcanzado para mes ${mesStr} (${areaKey})`);
         }
 
         const conteosPorAnio = [];
@@ -2083,17 +2271,17 @@ async function calcularMedianaHistoricaMes({ mesStr, paisFiltro, anioActualMax, 
                 if (mesActualDatos.totalFocos > 0) conteosPorAnio.push(mesActualDatos.totalFocos);
                 continue;
             }
-            if (!paisFiltro && porAnioPersistido[String(y)] !== undefined) {
+            if (esGlobalPuro && porAnioPersistido[String(y)] !== undefined) {
                 const val = Number(porAnioPersistido[String(y)]);
                 if (val > 0) conteosPorAnio.push(val);
                 continue;
             }
-            const cachedMes = getCached(resumenMesCache, `${y}-${mesStr}:${paisKey}`, 6 * 60 * 60 * 1000);
+            const cachedMes = getCached(resumenMesCache, `${y}-${mesStr}:${areaKey}`, 6 * 60 * 60 * 1000);
             if (cachedMes && cachedMes.totalFocos > 0) {
                 conteosPorAnio.push(cachedMes.totalFocos);
                 continue;
             }
-            const countOnly = getCached(resumenMesCache, `${y}-${mesStr}:${paisKey}:countOnly`, 6 * 60 * 60 * 1000);
+            const countOnly = getCached(resumenMesCache, `${y}-${mesStr}:${areaKey}:countOnly`, 6 * 60 * 60 * 1000);
             if (countOnly && countOnly > 0) conteosPorAnio.push(countOnly);
         }
 
@@ -2110,6 +2298,7 @@ async function calcularMedianaHistoricaMes({ mesStr, paisFiltro, anioActualMax, 
 
         const resultado = {
             mediana: calcularMediana(conteosPorAnio),
+            promedio: calcularPromedio(conteosPorAnio),
             aniosAnalizados: conteosPorAnio.length
         };
         if (conteosPorAnio.length > 0 && !presupuestoAgotado) {
@@ -2118,7 +2307,7 @@ async function calcularMedianaHistoricaMes({ mesStr, paisFiltro, anioActualMax, 
         return resultado;
     } catch (error) {
         logError(`calcularMedianaHistoricaMes(${mesStr})`, error);
-        return { mediana: 0, aniosAnalizados: 0 };
+        return { mediana: 0, promedio: 0, aniosAnalizados: 0 };
     }
 }
 
@@ -2185,6 +2374,11 @@ function construirResumenDiarioPayload({ anioNum, anioStr, mesNum, mesStr, datos
 app.get('/api/incendios/resumen', async (req, res) => {
     try {
         const { anioConsulta, mesConsulta, pais, modo } = req.query;
+        const { bbox, error: errEspacial } = parsearFiltrosEspaciales(req.query);
+        if (errEspacial) {
+            return res.status(400).json({ error: errEspacial });
+        }
+
         const anioNum = parseInt(anioConsulta, 10);
         const maxAnio = new Date().getUTCFullYear() + 1;
         const esModoRapido = String(modo || '').toLowerCase() === 'rapido';
@@ -2211,7 +2405,11 @@ app.get('/api/incendios/resumen', async (req, res) => {
         const fechaHoy = obtenerFechaHoy();
         const [hoyAnioStr, hoyMesStr] = fechaHoy.split('-');
         const hoyAnioNum = parseInt(hoyAnioStr, 10);
-        const esAnioPasadoGlobal = anioNum < hoyAnioNum && !pais;
+        const paisFiltro = pais || null;
+        const areaKey = construirClaveArea({ paisFiltro, bbox });
+        const paisesBbox = !paisFiltro && bbox ? await resolverPaisesPorBbox(bbox) : null;
+        const esAnioPasadoGlobal = anioNum < hoyAnioNum && !paisFiltro && !bbox;
+        const etiquetaArea = paisFiltro || (bbox ? 'Área seleccionada' : 'Global');
 
         // 1. Camino ultrarrápido: revisar si el año completo ya existe precalculado en GCS (_iris_cache/resumen_YYYY.json)
         let anioDesdeCacheGcs = null;
@@ -2233,13 +2431,15 @@ app.get('/api/incendios/resumen', async (req, res) => {
                 mes: m.mes,
                 totalFocos: m.totalFocos,
                 frpMax: m.frpMax,
+                frpAvg: m.frpAvg || 0,
                 intensidadMaxima: m.intensidadMaxima,
                 nivelMaximo: m.nivelMaximo
             }));
             const payload = {
                 anio: anioNum,
                 mes: mesNum,
-                pais: pais || 'Global',
+                pais: etiquetaArea,
+                bbox: null,
                 parcial: false,
                 resumenMensual
             };
@@ -2250,11 +2450,14 @@ app.get('/api/incendios/resumen', async (req, res) => {
                 }));
                 const medianaInfo = await calcularMedianaHistoricaMes({
                     mesStr,
-                    paisFiltro: pais,
+                    paisFiltro,
+                    bbox,
+                    paisesBbox,
                     anioActualMax: hoyAnioNum,
                     mesActualDatos: { anio: anioNum, totalFocos: datosMes.totalFocos }
                 });
                 payload.medianaHistoricaMes = medianaInfo.mediana;
+                payload.promedioHistoricoMes = medianaInfo.promedio || 0;
                 payload.aniosDisponiblesMediana = medianaInfo.aniosAnalizados;
             }
             return await enviarJson(req, res, payload);
@@ -2267,7 +2470,9 @@ app.get('/api/incendios/resumen', async (req, res) => {
                 anioStr,
                 mesStr,
                 archivosMes,
-                paisFiltro: pais,
+                paisFiltro,
+                bbox,
+                paisesBbox,
                 incluirDias: true,
                 fechaHoy
             });
@@ -2278,28 +2483,31 @@ app.get('/api/incendios/resumen', async (req, res) => {
                         mes: m,
                         totalFocos: datosMesSeleccionado.totalFocos,
                         frpMax: datosMesSeleccionado.frpMax,
+                        frpAvg: datosMesSeleccionado.frpAvg || 0,
                         intensidadMaxima: datosMesSeleccionado.intensidadMaxima,
                         nivelMaximo: datosMesSeleccionado.nivelMaximo
                     };
                 }
                 const mStr = String(m).padStart(2, '0');
-                const cachedOther = getCached(resumenMesCache, `${anioStr}-${mStr}:${pais ? normalizar(pais) : 'global'}`, 6 * 60 * 60 * 1000);
+                const cachedOther = getCached(resumenMesCache, `${anioStr}-${mStr}:${areaKey}`, 6 * 60 * 60 * 1000);
                 if (cachedOther) {
                     return {
                         mes: m,
                         totalFocos: cachedOther.totalFocos,
                         frpMax: cachedOther.frpMax,
+                        frpAvg: cachedOther.frpAvg || 0,
                         intensidadMaxima: cachedOther.intensidadMaxima,
                         nivelMaximo: cachedOther.nivelMaximo
                     };
                 }
-                return { mes: m, totalFocos: 0, frpMax: 0, intensidadMaxima: 'Sin datos', nivelMaximo: 0 };
+                return { mes: m, totalFocos: 0, frpMax: 0, frpAvg: 0, intensidadMaxima: 'Sin datos', nivelMaximo: 0 };
             });
 
             const payload = {
                 anio: anioNum,
                 mes: mesNum,
-                pais: pais || 'Global',
+                pais: etiquetaArea,
+                bbox: bbox || null,
                 parcial: true,
                 resumenMensual,
                 ...construirResumenDiarioPayload({
@@ -2309,8 +2517,8 @@ app.get('/api/incendios/resumen', async (req, res) => {
             return await enviarJson(req, res, payload);
         }
 
-        // 3. Camino completo con single-flight por año/país y persistencia en GCS
-        const resumenKey = `${anioStr}:${pais ? normalizar(pais) : 'global'}`;
+        // 3. Camino completo con single-flight por año/área y persistencia en GCS
+        const resumenKey = `${anioStr}:${areaKey}`;
         let promesaAnio = resumenAnioPromesas.get(resumenKey);
         if (!promesaAnio) {
             promesaAnio = (async () => {
@@ -2329,7 +2537,9 @@ app.get('/api/incendios/resumen', async (req, res) => {
                         anioStr,
                         mesStr,
                         archivosMes: archivosPorMes[mesNum - 1],
-                        paisFiltro: pais,
+                        paisFiltro,
+                        bbox,
+                        paisesBbox,
                         incluirDias: true,
                         fechaHoy
                     });
@@ -2338,6 +2548,7 @@ app.get('/api/incendios/resumen', async (req, res) => {
                         mes: mesNum,
                         totalFocos: primero.totalFocos,
                         frpMax: primero.frpMax,
+                        frpAvg: primero.frpAvg || 0,
                         intensidadMaxima: primero.intensidadMaxima,
                         nivelMaximo: primero.nivelMaximo
                     };
@@ -2352,6 +2563,7 @@ app.get('/api/incendios/resumen', async (req, res) => {
                             mes: m,
                             totalFocos: 0,
                             frpMax: 0,
+                            frpAvg: 0,
                             intensidadMaxima: 'Sin datos',
                             nivelMaximo: 0,
                             distribucion: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
@@ -2362,10 +2574,11 @@ app.get('/api/incendios/resumen', async (req, res) => {
                             mes: m,
                             totalFocos: 0,
                             frpMax: 0,
+                            frpAvg: 0,
                             intensidadMaxima: 'Sin datos',
                             nivelMaximo: 0
                         };
-                        if (!pais && anioNum < hoyAnioNum) {
+                        if (!paisFiltro && !bbox && anioNum < hoyAnioNum) {
                             setCached(resumenMesCache, `${anioStr}-${mStr}:global`, vacio);
                         }
                         return;
@@ -2374,7 +2587,9 @@ app.get('/api/incendios/resumen', async (req, res) => {
                         anioStr,
                         mesStr: mStr,
                         archivosMes: archivosPorMes[m - 1],
-                        paisFiltro: pais,
+                        paisFiltro,
+                        bbox,
+                        paisesBbox,
                         incluirDias: true,
                         fechaHoy
                     });
@@ -2383,6 +2598,7 @@ app.get('/api/incendios/resumen', async (req, res) => {
                         mes: r.mes,
                         totalFocos: r.totalFocos,
                         frpMax: r.frpMax,
+                        frpAvg: r.frpAvg || 0,
                         intensidadMaxima: r.intensidadMaxima,
                         nivelMaximo: r.nivelMaximo
                     };
@@ -2410,7 +2626,8 @@ app.get('/api/incendios/resumen', async (req, res) => {
         const payload = {
             anio: anioNum,
             mes: mesNum,
-            pais: pais || 'Global',
+            pais: etiquetaArea,
+            bbox: bbox || null,
             parcial: false,
             resumenMensual
         };
@@ -2422,12 +2639,15 @@ app.get('/api/incendios/resumen', async (req, res) => {
 
             const medianaInfo = await calcularMedianaHistoricaMes({
                 mesStr,
-                paisFiltro: pais,
+                paisFiltro,
+                bbox,
+                paisesBbox,
                 anioActualMax: hoyAnioNum,
                 mesActualDatos: { anio: anioNum, totalFocos: datosMesSeleccionado.totalFocos }
             });
 
             payload.medianaHistoricaMes = medianaInfo.mediana;
+            payload.promedioHistoricoMes = medianaInfo.promedio || 0;
             payload.aniosDisponiblesMediana = medianaInfo.aniosAnalizados;
         }
 
@@ -2435,6 +2655,485 @@ app.get('/api/incendios/resumen', async (req, res) => {
     } catch (error) {
         logError('/api/incendios/resumen', error);
         res.status(500).json({ error: 'Error interno al generar resumen histórico', detalle: error.message });
+    }
+});
+
+// ---------------------------------------------------------------
+// HISTORIAL ANUAL Y ESTACIONAL (2000–PRESENTE) POR ÁREA O GLOBAL
+// ---------------------------------------------------------------
+function crearRegistroAnioVacio(anio) {
+    return {
+        anio,
+        totalFocos: 0,
+        frpMax: 0,
+        frpAvg: 0,
+        _sumFrp: 0,
+        _validFrp: 0,
+        nivelMaximo: 0,
+        mesPico: 0,
+        mesPicoFocos: 0,
+        meses: new Array(12).fill(0)
+    };
+}
+
+function finalizarListaAnios(aniosMap, desdeAnio, hastaAnio, areaLabel, bbox, parcial) {
+    const porAnio = [];
+    const mesBuckets = Array.from({ length: 12 }, (_, idx) => ({
+        mes: idx + 1,
+        totalFocos: 0,
+        valoresConDatos: [],
+        maxAnual: 0,
+        anioPico: 0
+    }));
+
+    for (let y = desdeAnio; y <= hastaAnio; y++) {
+        const reg = aniosMap.get(y) || crearRegistroAnioVacio(y);
+        let sumMes = 0;
+        let mesPico = 0;
+        let mesPicoFocos = 0;
+        const mesesLimpios = reg.meses.map((v, idx) => {
+            const c = Math.max(0, Math.round(Number(v) || 0));
+            sumMes += c;
+            if (c > mesPicoFocos) {
+                mesPicoFocos = c;
+                mesPico = idx + 1;
+            }
+            const mb = mesBuckets[idx];
+            mb.totalFocos += c;
+            if (c > 0) {
+                mb.valoresConDatos.push(c);
+                if (c > mb.maxAnual) {
+                    mb.maxAnual = c;
+                    mb.anioPico = y;
+                }
+            }
+            return c;
+        });
+
+        const totalFocos = Math.max(reg.totalFocos || 0, sumMes);
+        const frpMax = totalFocos > 0 ? Math.round((reg.frpMax || 0) * 100) / 100 : 0;
+        const frpAvg = reg._validFrp > 0
+            ? Math.round((reg._sumFrp / reg._validFrp) * 100) / 100
+            : (reg.frpAvg || 0);
+        const nivelMaximo = reg.nivelMaximo || (totalFocos > 0 && frpMax > 0 ? clasificarNivelFrp(frpMax) : 0);
+
+        porAnio.push({
+            anio: y,
+            totalFocos,
+            frpMax,
+            frpAvg,
+            nivelMaximo,
+            mesPico,
+            mesPicoFocos,
+            meses: mesesLimpios
+        });
+    }
+
+    const completosPasados = porAnio.filter((y) => y.anio < hastaAnio && y.totalFocos > 0);
+    const baseAnual = completosPasados.length > 0 ? completosPasados : porAnio.filter((y) => y.totalFocos > 0);
+    const totalHistorico = porAnio.reduce((acc, y) => acc + y.totalFocos, 0);
+    const valoresAnuales = baseAnual.map((y) => y.totalFocos);
+    const promedioAnual = calcularPromedio(valoresAnuales);
+    const medianaAnual = calcularMediana(valoresAnuales);
+
+    const topAnios = porAnio
+        .filter((y) => y.totalFocos > 0)
+        .slice()
+        .sort((a, b) => b.totalFocos - a.totalFocos)
+        .slice(0, 6)
+        .map(({ anio, totalFocos, frpMax, frpAvg, mesPico, mesPicoFocos }) => ({
+            anio, totalFocos, frpMax, frpAvg, mesPico, mesPicoFocos
+        }));
+
+    const porMes = mesBuckets.map((mb) => {
+        // Divide promedio entre años que realmente tuvieron cobertura en el dataset para evitar sesgo por meses sin registro
+        const aniosActivosArea = baseAnual.length || 1;
+        const promedioMes = Math.round((mb.totalFocos / aniosActivosArea) * 100) / 100;
+        return {
+            mes: mb.mes,
+            totalFocos: mb.totalFocos,
+            aniosConDatos: mb.valoresConDatos.length,
+            promedioAnual: mb.valoresConDatos.length > 0 ? calcularPromedio(mb.valoresConDatos) : promedioMes,
+            medianaAnual: calcularMediana(mb.valoresConDatos),
+            maxAnual: mb.maxAnual,
+            anioPico: mb.anioPico
+        };
+    });
+
+    const mesCounts = porMes.filter((m) => m.totalFocos > 0).map((m) => m.aniosConDatos);
+    const maxMesAnios = mesCounts.length ? Math.max(...mesCounts) : 0;
+    const minMesAnios = mesCounts.length ? Math.min(...mesCounts) : 0;
+    const coberturaDesigual = Boolean(parcial) || (maxMesAnios - minMesAnios > 3);
+    const topMesesEstacionales = porMes
+        .filter((m) => m.totalFocos > 0)
+        .slice()
+        .sort((a, b) => coberturaDesigual
+            ? (b.totalFocos - a.totalFocos)
+            : (b.promedioAnual - a.promedioAnual))
+        .slice(0, 4);
+
+    return {
+        desdeAnio,
+        hastaAnio,
+        pais: areaLabel,
+        bbox: bbox || null,
+        parcial: Boolean(parcial),
+        totalHistorico,
+        aniosConDatos: porAnio.filter((y) => y.totalFocos > 0).length,
+        promedioAnual,
+        medianaAnual,
+        anioPico: topAnios[0] || null,
+        topAnios,
+        mesPicoEstacional: topMesesEstacionales[0] || null,
+        topMesesEstacionales,
+        porAnio,
+        porMes
+    };
+}
+
+app.get('/api/incendios/historial-anual', async (req, res) => {
+    try {
+        const { pais } = req.query;
+        const { bbox, error: errEspacial } = parsearFiltrosEspaciales(req.query);
+        if (errEspacial) {
+            return res.status(400).json({ error: errEspacial });
+        }
+
+        const fechaHoy = obtenerFechaHoy();
+        const [hoyAnioStr, hoyMesStr] = fechaHoy.split('-');
+        const hoyAnioNum = parseInt(hoyAnioStr, 10);
+        const hoyMesNum = parseInt(hoyMesStr, 10);
+        const paisFiltro = pais || null;
+        const esGlobalPuro = !paisFiltro && !bbox;
+        const areaKey = construirClaveArea({ paisFiltro, bbox });
+        const cacheKey = `${areaKey}:${fechaHoy}`;
+        const etiquetaArea = paisFiltro || (bbox ? 'Área seleccionada' : 'Global');
+
+        const cached = getCached(historialAnualCache, cacheKey, 30 * 60 * 1000);
+        if (cached) {
+            return await enviarJson(req, res, cached);
+        }
+
+        let promesa = historialAnualPromesas.get(cacheKey);
+        if (!promesa) {
+            promesa = (async () => {
+                const aniosMap = new Map();
+                for (let y = ANIO_MINIMO_GCS; y <= hoyAnioNum; y++) {
+                    aniosMap.set(y, crearRegistroAnioVacio(y));
+                }
+
+                const aniosPasados = [];
+                for (let y = ANIO_MINIMO_GCS; y < hoyAnioNum; y++) aniosPasados.push(y);
+
+                const paisesBbox = !paisFiltro && bbox ? await resolverPaisesPorBbox(bbox) : null;
+                const gcsHistKey = esGlobalPuro
+                    ? `${GCS_CACHE_PREFIX}/historial_global_pasado_v1.json`
+                    : `${GCS_CACHE_PREFIX}/hist_area_${crypto.createHash('sha1').update(areaKey).digest('hex').slice(0, 16)}_v1.json`;
+
+                let pasadosDesdeGcs = false;
+                let parcialPasado = false;
+
+                try {
+                    const docPast = await leerJsonGcs(gcsHistKey);
+                    if (
+                        docPast &&
+                        docPast.schemaVersion === CACHE_SCHEMA_VERSION &&
+                        docPast.areaKey === areaKey &&
+                        docPast.hastaAnioPasado >= hoyAnioNum - 1 &&
+                        Array.isArray(docPast.porAnio)
+                    ) {
+                        for (const item of docPast.porAnio) {
+                            if (!item || !aniosMap.has(item.anio)) continue;
+                            aniosMap.set(item.anio, {
+                                anio: item.anio,
+                                totalFocos: item.totalFocos || 0,
+                                frpMax: item.frpMax || 0,
+                                frpAvg: item.frpAvg || 0,
+                                _sumFrp: 0,
+                                _validFrp: 0,
+                                nivelMaximo: item.nivelMaximo || 0,
+                                mesPico: item.mesPico || 0,
+                                mesPicoFocos: item.mesPicoFocos || 0,
+                                meses: Array.isArray(item.meses) && item.meses.length === 12
+                                    ? item.meses.slice()
+                                    : new Array(12).fill(0)
+                            });
+                        }
+                        pasadosDesdeGcs = true;
+                    }
+                } catch {
+                    // continúa con cálculo
+                }
+
+                let bgPendientesGlobal = null;
+                let bgEscanearAnioGlobal = null;
+                if (!pasadosDesdeGcs) {
+                    const inicioPasado = Date.now();
+                    const PRESUPUESTO_HIST_MS = esGlobalPuro ? 14000 : 24000;
+
+                    if (esGlobalPuro) {
+                        // 1. Aprovecha resúmenes anuales o conteos globales ya guardados en GCS
+                        const faltantes = new Set(aniosPasados);
+                        await conLimite(aniosPasados, 12, async (y) => {
+                            const doc = await cargarResumenAnioDesdeGcs(String(y));
+                            if (doc && Array.isArray(doc.meses) && doc.meses.length === 12) {
+                                const reg = aniosMap.get(y);
+                                let frpMax = 0;
+                                let nivelMax = 0;
+                                let total = 0;
+                                for (let i = 0; i < 12; i++) {
+                                    const m = doc.meses[i] || {};
+                                    const c = Number(m.totalFocos) || 0;
+                                    reg.meses[i] = c;
+                                    total += c;
+                                    if (Number(m.frpMax) > frpMax) frpMax = Number(m.frpMax);
+                                    if (Number(m.nivelMaximo) > nivelMax) nivelMax = Number(m.nivelMaximo);
+                                }
+                                reg.totalFocos = total;
+                                reg.frpMax = frpMax;
+                                reg.nivelMaximo = nivelMax;
+                                faltantes.delete(y);
+                                return;
+                            }
+                            const docY = await leerJsonGcs(`${GCS_CACHE_PREFIX}/hist_global_y_${y}.json`);
+                            if (docY && docY.schemaVersion === CACHE_SCHEMA_VERSION && Array.isArray(docY.meses) && docY.meses.length === 12) {
+                                const reg = aniosMap.get(y);
+                                reg.meses = docY.meses.map((v) => Math.max(0, Number(v) || 0));
+                                reg.totalFocos = reg.meses.reduce((a, b) => a + b, 0);
+                                reg.frpMax = Number(docY.frpMax) || 0;
+                                reg.nivelMaximo = Number(docY.nivelMaximo) || 0;
+                                faltantes.delete(y);
+                            }
+                        });
+
+                        // 2. Para los años que aún no tenían cache, aprovecha _iris_cache/mediana_MM.json
+                        if (faltantes.size > 0) {
+                            const mesesFaltantesPorAnio = new Map();
+                            for (const y of faltantes) {
+                                mesesFaltantesPorAnio.set(y, new Set(Array.from({ length: 12 }, (_, i) => i + 1)));
+                            }
+                            await conLimite(Array.from({ length: 12 }, (_, i) => i + 1), 12, async (m) => {
+                                const mStr = String(m).padStart(2, '0');
+                                const docMed = await leerJsonGcs(`${GCS_CACHE_PREFIX}/mediana_${mStr}.json`);
+                                if (docMed && docMed.schemaVersion === CACHE_SCHEMA_VERSION && docMed.porAnio) {
+                                    for (const y of faltantes) {
+                                        if (docMed.porAnio[String(y)] !== undefined) {
+                                            const c = Number(docMed.porAnio[String(y)]) || 0;
+                                            aniosMap.get(y).meses[m - 1] = c;
+                                            mesesFaltantesPorAnio.get(y).delete(m);
+                                        }
+                                    }
+                                }
+                            });
+
+                            const pendientesScan = [];
+                            for (const y of Array.from(mesesFaltantesPorAnio.keys()).sort((a, b) => b - a)) {
+                                const mSet = mesesFaltantesPorAnio.get(y);
+                                if (mSet && mSet.size > 0) pendientesScan.push([y, Array.from(mSet)]);
+                            }
+
+                            const escanearAnioGlobal = async ([y, mesesFalt], conPresupuesto) => {
+                                if (conPresupuesto && Date.now() - inicioPasado > PRESUPUESTO_HIST_MS) {
+                                    parcialPasado = true;
+                                    return false;
+                                }
+                                const archivosPorMes = await listarArchivosAnioPorMes(String(y));
+                                const reg = aniosMap.get(y);
+                                let anioParcial = false;
+                                await conLimite(mesesFalt, 4, async (m) => {
+                                    if (conPresupuesto && Date.now() - inicioPasado > PRESUPUESTO_HIST_MS) {
+                                        anioParcial = true;
+                                        parcialPasado = true;
+                                        return;
+                                    }
+                                    let totalM = 0;
+                                    let mesParcial = false;
+                                    await conLimite(ordenarPorTamanoDesc(archivosPorMes[m - 1] || []), 20, async (a) => {
+                                        if (conPresupuesto && Date.now() - inicioPasado > PRESUPUESTO_HIST_MS) {
+                                            mesParcial = true;
+                                            anioParcial = true;
+                                            parcialPasado = true;
+                                            return;
+                                        }
+                                        totalM += await contarFilasCsvGcs(a.file);
+                                    });
+                                    if (!mesParcial) {
+                                        reg.meses[m - 1] = totalM;
+                                    }
+                                });
+                                reg.totalFocos = reg.meses.reduce((a, b) => a + b, 0);
+                                if (!anioParcial) {
+                                    guardarEnGcsSegundoPlano(`${GCS_CACHE_PREFIX}/hist_global_y_${y}.json`, JSON.stringify({
+                                        schemaVersion: CACHE_SCHEMA_VERSION,
+                                        anio: y,
+                                        meses: reg.meses,
+                                        frpMax: reg.frpMax || 0,
+                                        nivelMaximo: reg.nivelMaximo || 0,
+                                        totalFocos: reg.totalFocos
+                                    }));
+                                }
+                                return !anioParcial;
+                            };
+
+                            // Escanea años recientes faltantes dentro del presupuesto y guarda cada año completo en GCS
+                            const completadosFg = new Set();
+                            await conLimite(pendientesScan, 2, async (item) => {
+                                const ok = await escanearAnioGlobal(item, true);
+                                if (ok) completadosFg.add(item[0]);
+                            });
+
+                            for (const y of faltantes) {
+                                const reg = aniosMap.get(y);
+                                reg.totalFocos = reg.meses.reduce((a, b) => a + b, 0);
+                            }
+
+                            if (parcialPasado && pendientesScan.length > 0 && !precalentandoGlobalPromesa) {
+                                const restantesScan = pendientesScan.filter(([y]) => !completadosFg.has(y));
+                                if (restantesScan.length > 0) {
+                                    bgPendientesGlobal = restantesScan;
+                                    bgEscanearAnioGlobal = escanearAnioGlobal;
+                                }
+                            }
+                        }
+                    } else {
+                        // Área específica (país y/o bbox): lista y escanea archivos por año (más recientes primero)
+                        const aniosDesc = aniosPasados.slice().reverse();
+                        await conLimite(aniosDesc, 2, async (y) => {
+                            if (Date.now() - inicioPasado > PRESUPUESTO_HIST_MS) {
+                                parcialPasado = true;
+                                return;
+                            }
+                            const archivosPorMes = await listarArchivosAnioPorMes(String(y));
+                            const reg = aniosMap.get(y);
+                            await conLimite(Array.from({ length: 12 }, (_, idx) => idx + 1), 6, async (m) => {
+                                if (Date.now() - inicioPasado > PRESUPUESTO_HIST_MS) {
+                                    parcialPasado = true;
+                                    return;
+                                }
+                                const archivosMes = archivosPorMes[m - 1] || [];
+                                const objetivo = await seleccionarArchivosPorArea(archivosMes, paisFiltro, bbox, paisesBbox);
+                                if (!objetivo.length) return;
+
+                                let totalM = 0;
+                                let frpMaxM = 0;
+                                let sumFrpM = 0;
+                                let validFrpM = 0;
+                                await conLimite(ordenarPorTamanoDesc(objetivo), 8, async (a) => {
+                                    await escanearCsvResumenConCoordsGcs(a.file, bbox, (_fechaStr, frpRaw) => {
+                                        totalM++;
+                                        const frp = parseFloat(frpRaw);
+                                        if (Number.isFinite(frp)) {
+                                            if (frp > frpMaxM) frpMaxM = frp;
+                                            sumFrpM += frp;
+                                            validFrpM++;
+                                        }
+                                    });
+                                });
+
+                                reg.meses[m - 1] = totalM;
+                                reg.totalFocos += totalM;
+                                reg._sumFrp += sumFrpM;
+                                reg._validFrp += validFrpM;
+                                if (frpMaxM > reg.frpMax) reg.frpMax = frpMaxM;
+                            });
+                            if (reg.totalFocos > 0 && reg.frpMax > 0) {
+                                reg.nivelMaximo = clasificarNivelFrp(reg.frpMax);
+                            }
+                        });
+                    }
+
+                    if (!parcialPasado) {
+                        const resumenPasadoSnapshot = aniosPasados.map((y) => {
+                            const r = aniosMap.get(y);
+                            const avg = r._validFrp > 0 ? Math.round((r._sumFrp / r._validFrp) * 100) / 100 : (r.frpAvg || 0);
+                            return {
+                                anio: r.anio,
+                                totalFocos: r.totalFocos,
+                                frpMax: Math.round((r.frpMax || 0) * 100) / 100,
+                                frpAvg: avg,
+                                nivelMaximo: r.nivelMaximo,
+                                meses: r.meses
+                            };
+                        });
+                        guardarEnGcsSegundoPlano(gcsHistKey, JSON.stringify({
+                            schemaVersion: CACHE_SCHEMA_VERSION,
+                            areaKey,
+                            hastaAnioPasado: hoyAnioNum - 1,
+                            porAnio: resumenPasadoSnapshot
+                        }));
+                    }
+                }
+
+                // 3. Incorpora siempre el año en curso (2026 u hoyAnioNum) hasta el mes actual con datos en vivo
+                const regActual = aniosMap.get(hoyAnioNum);
+                const archivosAnioActual = await listarArchivosAnioPorMes(hoyAnioStr).catch(() => Array.from({ length: 12 }, () => []));
+                await conLimite(Array.from({ length: hoyMesNum }, (_, i) => i + 1), 4, async (m) => {
+                    const mStr = String(m).padStart(2, '0');
+                    const mesObj = await calcularResumenMes({
+                        anioStr: hoyAnioStr,
+                        mesStr: mStr,
+                        archivosMes: archivosAnioActual[m - 1] || [],
+                        paisFiltro,
+                        bbox,
+                        paisesBbox,
+                        incluirDias: false,
+                        fechaHoy
+                    });
+                    regActual.meses[m - 1] = mesObj.totalFocos;
+                    regActual.totalFocos += mesObj.totalFocos;
+                    if (mesObj.frpMax > regActual.frpMax) regActual.frpMax = mesObj.frpMax;
+                    if (mesObj.nivelMaximo > regActual.nivelMaximo) regActual.nivelMaximo = mesObj.nivelMaximo;
+                    if (mesObj.frpAvg > 0 && mesObj.totalFocos > 0) {
+                        regActual._sumFrp += mesObj.frpAvg * mesObj.totalFocos;
+                        regActual._validFrp += mesObj.totalFocos;
+                    }
+                });
+
+                const payload = finalizarListaAnios(aniosMap, ANIO_MINIMO_GCS, hoyAnioNum, etiquetaArea, bbox, parcialPasado);
+                if (!parcialPasado) {
+                    setCached(historialAnualCache, cacheKey, payload);
+                } else if (bgPendientesGlobal && bgEscanearAnioGlobal && !precalentandoGlobalPromesa) {
+                    precalentandoGlobalPromesa = (async () => {
+                        try {
+                            await conLimite(bgPendientesGlobal, 2, (item) => bgEscanearAnioGlobal(item, false));
+                            const snapshotGlobal = aniosPasados.map((y) => {
+                                const r = aniosMap.get(y);
+                                return {
+                                    anio: r.anio,
+                                    totalFocos: r.totalFocos,
+                                    frpMax: Math.round((r.frpMax || 0) * 100) / 100,
+                                    frpAvg: r.frpAvg || 0,
+                                    nivelMaximo: r.nivelMaximo,
+                                    meses: r.meses
+                                };
+                            });
+                            guardarEnGcsSegundoPlano(gcsHistKey, JSON.stringify({
+                                schemaVersion: CACHE_SCHEMA_VERSION,
+                                areaKey,
+                                hastaAnioPasado: hoyAnioNum - 1,
+                                porAnio: snapshotGlobal
+                            }));
+                            const completo = finalizarListaAnios(aniosMap, ANIO_MINIMO_GCS, hoyAnioNum, etiquetaArea, bbox, false);
+                            setCached(historialAnualCache, cacheKey, completo);
+                        } catch (bgErr) {
+                            logWarn(`Precalentamiento global de historial interrumpido: ${bgErr.message}`);
+                        } finally {
+                            precalentandoGlobalPromesa = null;
+                        }
+                    })();
+                }
+                return payload;
+            })().finally(() => {
+                historialAnualPromesas.delete(cacheKey);
+            });
+            historialAnualPromesas.set(cacheKey, promesa);
+        }
+
+        const resultado = await promesa;
+        return await enviarJson(req, res, resultado);
+    } catch (error) {
+        logError('/api/incendios/historial-anual', error);
+        res.status(500).json({ error: 'Error interno al generar historial anual de incendios', detalle: error.message });
     }
 });
 

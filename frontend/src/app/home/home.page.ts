@@ -15,9 +15,12 @@ import {
 } from '../components';
 import {
   AlertHotspot,
+  AreaFilterScope,
   Filtros,
+  HistorialAnualResponse,
   HotspotFeature,
   HotspotFeatureCollection,
+  IncendiosQueryParams,
   MapProjectionType,
   MapSettings,
   OrigenCalor,
@@ -57,6 +60,7 @@ export class HomePage implements OnDestroy {
   private readonly csvExport = inject(CsvExportService);
 
   @ViewChild('tokenDlg') tokenDlg?: ElementRef<HTMLDialogElement>;
+  @ViewChild('timelineCal') timelineCal?: TimelineCalendarComponent;
 
   private readonly reduceMotion =
     typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -113,6 +117,10 @@ export class HomePage implements OnDestroy {
   readonly loadingDayHotspots = signal<boolean>(false);
   readonly playbackActive = signal<boolean>(false);
   readonly timelineMonthTruncated = signal<boolean>(false);
+  readonly historialAnual = signal<HistorialAnualResponse | null>(null);
+  readonly loadingHistorial = signal<boolean>(false);
+  readonly downloadingAreaCsv = signal<boolean>(false);
+  readonly areaLabel = computed(() => this.mapbox.areaScope()?.name || this.mapbox.areaName() || 'Global');
   readonly usingDefaultFilters = computed(
     () => this.filters().severidades.size === 5 && this.filters().origenes.size === 4
   );
@@ -129,6 +137,9 @@ export class HomePage implements OnDestroy {
   private resumenBgSub: Subscription | null = null;
   private monthSub: Subscription | null = null;
   private daySub: Subscription | null = null;
+  private histSub: Subscription | null = null;
+  private areaCsvSub: Subscription | null = null;
+  private lastScopeKey = '||';
   private loadedMonthKey = '';
   private mapContainerEl: HTMLElement | null = null;
 
@@ -182,6 +193,22 @@ export class HomePage implements OnDestroy {
       }
     });
 
+    effect(() => {
+      const scope = this.mapbox.areaScope();
+      const key = `${scope?.name || ''}|${scope?.pais || ''}|${scope?.bbox?.join(',') || ''}`;
+      if (key === this.lastScopeKey) return;
+      this.lastScopeKey = key;
+      if (this.timelineOpen()) {
+        this.loadAnnualHistory(true);
+        this.loadTimelineData(this.timelineYear(), this.timelineMonth(), this.timelineDay());
+        if (this.timelineDay() > 0) {
+          this.onSelectTimelineDay(this.timelineDay());
+        }
+      } else {
+        this.historialAnual.set(null);
+      }
+    });
+
     this.initAmbientMusic();
   }
 
@@ -192,6 +219,8 @@ export class HomePage implements OnDestroy {
     this.resumenBgSub?.unsubscribe();
     this.monthSub?.unsubscribe();
     this.daySub?.unsubscribe();
+    this.histSub?.unsubscribe();
+    this.areaCsvSub?.unsubscribe();
     if (this.toastTimer) clearTimeout(this.toastTimer);
     if (this.alertAutoClearTimer) clearTimeout(this.alertAutoClearTimer);
     this.cleanupAmbientMusic();
@@ -433,6 +462,7 @@ export class HomePage implements OnDestroy {
     this.timelineOpen.set(true);
     this.dayCollection.set(null);
     this.loadingDayHotspots.set(false);
+    this.loadAnnualHistory();
     this.loadTimelineData(this.timelineYear(), this.timelineMonth(), this.timelineDay());
     if (this.timelineDay() > 0) {
       this.onSelectTimelineDay(this.timelineDay());
@@ -500,7 +530,9 @@ export class HomePage implements OnDestroy {
     }
 
     // Si el mes completo ya está cargado sin truncamiento, filtra en GPU al instante sin nueva petición HTTP
-    const monthKey = `${year}-${month}`;
+    const scope = this.mapbox.areaScope();
+    const scopeKey = `${scope?.name || ''}|${scope?.pais || ''}|${scope?.bbox?.join(',') || ''}`;
+    const monthKey = `${year}-${month}:${scopeKey}`;
     if (
       this.loadedMonthKey === monthKey &&
       !this.loadingMonthHotspots() &&
@@ -518,7 +550,7 @@ export class HomePage implements OnDestroy {
     this.dayCollection.set(null);
     this.loadingDayHotspots.set(true);
 
-    this.daySub = this.api.fetchDayHotspots(fecha).subscribe({
+    this.daySub = this.api.fetchDayHotspots(fecha, this.mapbox.areaScope()).subscribe({
       next: (fc) => {
         if (!this.timelineOpen() || this.timelineYear() !== year || this.timelineMonth() !== month || this.timelineDay() !== day) {
           return;
@@ -575,21 +607,24 @@ export class HomePage implements OnDestroy {
     this.resumenBgSub?.unsubscribe();
     this.monthSub?.unsubscribe();
 
-    const monthKey = `${year}-${month}`;
+    const scope = this.mapbox.areaScope();
+    const scopeKey = `${scope?.name || ''}|${scope?.pais || ''}|${scope?.bbox?.join(',') || ''}`;
+    const monthKey = `${year}-${month}:${scopeKey}`;
     this.loadedMonthKey = '';
     this.timelineMonthTruncated.set(false);
 
-    // Conserva las barras anuales ya conocidas al cambiar de mes dentro del mismo año
+    // Conserva las barras anuales ya conocidas al cambiar de mes dentro del mismo año y zona
     const prevResumen = this.resumen();
+    const sameArea = !prevResumen || prevResumen.pais === (scope?.pais || scope?.name || 'Global');
     const yearBars =
-      prevResumen && prevResumen.anio === year && prevResumen.resumenMensual?.length === 12
+      sameArea && prevResumen && prevResumen.anio === year && prevResumen.resumenMensual?.length === 12
         ? prevResumen.resumenMensual
-        : this.api.getCachedYearSummary(year);
+        : this.api.getCachedYearSummary(year, scope);
     if (yearBars?.length === 12) {
       this.resumen.set({
         anio: year,
         mes: month,
-        pais: 'Global',
+        pais: scope?.name || 'Global',
         parcial: true,
         resumenMensual: yearBars
       });
@@ -600,7 +635,7 @@ export class HomePage implements OnDestroy {
     this.loadingResumen.set(true);
     this.loadingMonthHotspots.set(true);
 
-    this.resumenSub = this.api.fetchResumen(year, month, undefined, 'rapido').subscribe({
+    this.resumenSub = this.api.fetchResumen(year, month, scope, 'rapido').subscribe({
       next: (res) => {
         if (this.timelineYear() !== year || this.timelineMonth() !== month) return;
         this.resumen.set(res);
@@ -608,7 +643,7 @@ export class HomePage implements OnDestroy {
 
         if (res.parcial) {
           this.resumenBgSub?.unsubscribe();
-          this.resumenBgSub = this.api.fetchResumen(year, month, undefined, 'completo').subscribe({
+          this.resumenBgSub = this.api.fetchResumen(year, month, scope, 'completo').subscribe({
             next: (fullRes) => {
               if (this.timelineOpen() && this.timelineYear() === year && this.timelineMonth() === month) {
                 this.resumen.set(fullRes);
@@ -625,7 +660,7 @@ export class HomePage implements OnDestroy {
       }
     });
 
-    this.monthSub = this.api.fetchMonthWithMeta(year, month).subscribe({
+    this.monthSub = this.api.fetchMonthWithMeta(year, month, scope).subscribe({
       next: (res) => {
         if (this.timelineYear() !== year || this.timelineMonth() !== month) return;
         this.timelineCollection.set(res.fc);
@@ -763,6 +798,153 @@ export class HomePage implements OnDestroy {
     }
     this.mapbox.resetView();
     this.updateDayRange(this.todayDay - 6, this.todayDay);
+  }
+
+  onEnsureAnnualHistory(): void {
+    if (!this.historialAnual() && !this.loadingHistorial()) {
+      this.loadAnnualHistory();
+    }
+  }
+
+  loadAnnualHistory(force = false): void {
+    if (force) {
+      this.historialAnual.set(null);
+    }
+    const scope = this.mapbox.areaScope();
+    const reqScopeKey = `${scope?.name || ''}|${scope?.pais || ''}|${scope?.bbox?.join(',') || ''}`;
+    this.histSub?.unsubscribe();
+    this.loadingHistorial.set(true);
+    this.histSub = this.api.fetchAnnualHistory(scope).subscribe({
+      next: (res) => {
+        const curScope = this.mapbox.areaScope();
+        const curKey = `${curScope?.name || ''}|${curScope?.pais || ''}|${curScope?.bbox?.join(',') || ''}`;
+        if (curKey !== reqScopeKey) return;
+        this.historialAnual.set(res);
+        this.loadingHistorial.set(false);
+      },
+      error: () => {
+        this.loadingHistorial.set(false);
+      }
+    });
+  }
+
+  onOpenAreaHistory(): void {
+    if (!this.timelineOpen()) {
+      this.onToggleTimeline();
+    } else {
+      this.loadAnnualHistory(!this.historialAnual());
+    }
+    setTimeout(() => this.timelineCal?.openHistoryDialog(), 30);
+  }
+
+  onDownloadSearchCsv(): void {
+    const scope = this.mapbox.areaScope();
+    const box = scope?.bbox || this.mapbox.getAreaBox();
+    if (!box) {
+      this.onExportCsv();
+      return;
+    }
+
+    const name = scope?.name || this.mapbox.areaName() || 'area';
+    const areaSlug =
+      name
+        .split(',')[0]
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\w]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .toLowerCase() || 'area';
+
+    const periodTag = this.timelineOpen()
+      ? `${this.timelineYear()}-${String(this.timelineMonth()).padStart(2, '0')}${
+          this.timelineDay() ? '-' + String(this.timelineDay()).padStart(2, '0') : ''
+        }`
+      : this.nowUtc.toISOString().slice(0, 10);
+    const filenameBase = `iris-${areaSlug}-${periodTag}`;
+
+    const inAreaVisible = this.visibleFeatures().filter((feat) => {
+      const [lng, lat] = feat.geometry.coordinates;
+      return this.mapbox.isPointInArea(lng, lat, box);
+    });
+
+    if (inAreaVisible.length > 0 && (!this.timelineOpen() || !this.timelineMonthTruncated())) {
+      this.csvExport.exportFilteredFeaturesCsv(inAreaVisible, filenameBase);
+      this.showToast({
+        message: this.i18n.l(
+          `CSV de «${name.split(',')[0]}» descargado (${inAreaVisible.length.toLocaleString(this.i18n.locale())} focos).`,
+          `CSV for “${name.split(',')[0]}” downloaded (${inAreaVisible.length.toLocaleString(this.i18n.locale())} hotspots).`
+        )
+      });
+      return;
+    }
+
+    const [west, south, east, north] = box;
+    const query: IncendiosQueryParams = {
+      pais: scope?.pais,
+      ...(scope?.isCountry ? {} : { north, south, east, west }),
+      limite: 100000,
+      compact: 1
+    };
+    if (this.timelineOpen()) {
+      if (this.timelineDay() > 0) {
+        query.fecha = `${this.timelineYear()}-${String(this.timelineMonth()).padStart(2, '0')}-${String(
+          this.timelineDay()
+        ).padStart(2, '0')}`;
+      } else {
+        query.anioConsulta = this.timelineYear();
+        query.mesConsulta = this.timelineMonth();
+      }
+    } else {
+      query.fecha = this.nowUtc.toISOString().slice(0, 10);
+    }
+
+    this.areaCsvSub?.unsubscribe();
+    this.downloadingAreaCsv.set(true);
+    this.areaCsvSub = this.api.fetchSpatialHotspots(query).subscribe({
+      next: (fc) => {
+        this.downloadingAreaCsv.set(false);
+        const f = this.filters();
+        const filtered = fc.features.filter((feat) => {
+          const p = feat.properties;
+          const [lng, lat] = feat.geometry.coordinates;
+          return (
+            f.severidades.has(p.sev) &&
+            f.origenes.has(p.src) &&
+            this.mapbox.isPointInArea(lng, lat, box)
+          );
+        });
+        if (!filtered.length) {
+          this.showToast({
+            message: this.i18n.l(
+              `No se detectaron focos en «${name.split(',')[0]}» para el periodo actual.`,
+              `No hotspots detected in “${name.split(',')[0]}” for the active period.`
+            )
+          });
+          return;
+        }
+        this.csvExport.exportFilteredFeaturesCsv(filtered, filenameBase);
+        this.showToast({
+          message: this.i18n.l(
+            `CSV de «${name.split(',')[0]}» descargado (${filtered.length.toLocaleString(this.i18n.locale())} focos).`,
+            `CSV for “${name.split(',')[0]}” downloaded (${filtered.length.toLocaleString(this.i18n.locale())} hotspots).`
+          )
+        });
+      },
+      error: () => {
+        this.downloadingAreaCsv.set(false);
+        if (inAreaVisible.length > 0) {
+          this.csvExport.exportFilteredFeaturesCsv(inAreaVisible, filenameBase);
+        } else {
+          this.showToast({
+            message: this.i18n.l(
+              'No se pudo descargar el CSV de esta zona.',
+              'Could not download CSV for this area.'
+            ),
+            isError: true
+          });
+        }
+      }
+    });
   }
 
   onExportCsv(): void {

@@ -176,8 +176,9 @@ export class NavbarComponent {
 
     const match = q.match(/^(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)$/);
     if (match && Math.abs(+match[1]) <= 90 && Math.abs(+match[2]) <= 180) {
-      this.mapbox.flyTo([+match[2], +match[1]], 12, 2200);
+      this.mapbox.goToCoordinates(+match[1], +match[2]);
       this.suggestions.set([]);
+      this.emitDropdownBottom();
       return;
     }
 

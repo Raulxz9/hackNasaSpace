@@ -1,8 +1,11 @@
 <ion-content [scrollY]="false">
   <app-map-globe
     [projection]="settings().projection"
+    [downloadingAreaCsv]="downloadingAreaCsv()"
     (projectionChange)="onProjectionChange($event)"
     (containerReady)="onMapContainerReady($event)"
+    (downloadAreaCsv)="onDownloadSearchCsv()"
+    (openAreaHistory)="onOpenAreaHistory()"
   />
 
   <app-navbar
@@ -37,6 +40,7 @@
   />
 
   <app-timeline-calendar
+    #timelineCal
     [open]="timelineOpen()"
     [selectedYear]="timelineYear()"
     [selectedMonth]="timelineMonth()"
@@ -49,6 +53,9 @@
     [visibleFeatures]="visibleFeatures()"
     [monthTruncated]="timelineMonthTruncated()"
     [usingDefaultFilters]="usingDefaultFilters()"
+    [historialAnual]="historialAnual()"
+    [loadingHistorial]="loadingHistorial()"
+    [areaLabel]="areaLabel()"
     (selectYear)="onSelectTimelineYear($event)"
     (selectMonth)="onSelectTimelineMonth($event)"
     (selectDay)="onSelectTimelineDay($event)"
@@ -57,6 +64,7 @@
     (goPeak)="onGoTimelinePeak()"
     (exportCsv)="onExportCsv()"
     (exitTimeline)="onExitTimeline()"
+    (requestHistoryRefresh)="onEnsureAnnualHistory()"
     (notifyToast)="showToast($event)"
   />
 

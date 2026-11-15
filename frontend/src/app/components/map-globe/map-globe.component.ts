@@ -14,8 +14,11 @@ export class MapGlobeComponent implements AfterViewInit, OnDestroy {
   readonly mapbox = inject(MapboxService);
 
   readonly projection = input.required<MapProjectionType>();
+  readonly downloadingAreaCsv = input<boolean>(false);
   readonly projectionChange = output<MapProjectionType>();
   readonly containerReady = output<HTMLElement>();
+  readonly downloadAreaCsv = output<void>();
+  readonly openAreaHistory = output<void>();
 
   @ViewChild('mapContainer', { static: true }) mapContainer!: ElementRef<HTMLElement>;
 

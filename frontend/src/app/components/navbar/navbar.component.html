@@ -113,10 +113,10 @@
       class="btn"
       id="btnPred"
       [attr.aria-pressed]="predictionOpen()"
-      [title]="i18n.translate('Predicción de riesgo (experimental)')"
+      [title]="i18n.translate('Probabilidades de incendio (experimental)')"
       (click)="togglePrediction.emit()"
     >
-      <span>🔮</span><span class="tx">{{ i18n.translate('Predicción') }}</span>
+      <span>🔮</span><span class="tx">{{ i18n.translate('Probabilidades') }}</span>
     </button>
 
     <div class="langwrap">

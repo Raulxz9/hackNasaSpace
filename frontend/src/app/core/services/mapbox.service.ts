@@ -2,6 +2,7 @@ import { Injectable, NgZone, inject, signal } from '@angular/core';
 import mapboxgl, { LngLatLike, Map as MapboxMap, MapMouseEvent } from 'mapbox-gl';
 import { environment } from '../../../environments/environment';
 import {
+  AreaFilterScope,
   Filtros,
   GeocodeFeature,
   HotspotFeature,
@@ -84,6 +85,7 @@ export class MapboxService {
 
   readonly cursorCoords = signal<string>('—');
   readonly areaName = signal<string>('');
+  readonly areaScope = signal<AreaFilterScope | null>(null);
   readonly tokenError = signal<boolean>(false);
   readonly mapReady = signal<boolean>(false);
 
@@ -445,27 +447,71 @@ export class MapboxService {
     return (json.features || []) as GeocodeFeature[];
   }
 
+  private extractAreaScope(feature: GeocodeFeature): AreaFilterScope {
+    const type = (feature.place_type || [])[0];
+    const isCountry = type === 'country';
+    const countryCtx = feature.context?.find((c) => c.id.startsWith('country.'));
+    const pais = isCountry
+      ? feature.properties?.short_code?.toUpperCase() || feature.text
+      : countryCtx?.short_code?.toUpperCase() || countryCtx?.text || undefined;
+    const [lng, lat] = feature.center;
+    const fallbackBbox: [number, number, number, number] = [
+      Math.max(-180, lng - 0.35),
+      Math.max(-85, lat - 0.25),
+      Math.min(180, lng + 0.35),
+      Math.min(85, lat + 0.25)
+    ];
+    return {
+      name: feature.place_name || feature.text,
+      pais,
+      bbox: feature.bbox || fallbackBbox,
+      center: feature.center,
+      isCountry
+    };
+  }
+
   goToFeature(feature: GeocodeFeature): void {
     if (!this.map) return;
     this.stopSpin();
     const type = (feature.place_type || [])[0];
     const fine = type === 'address' || type === 'poi';
     const typeIdx = this.typesHierarchy.indexOf(type);
+    const scope = this.extractAreaScope(feature);
     this.drillState.level = typeIdx >= 0 ? typeIdx : fine ? this.typesHierarchy.length : 2;
-    this.drillState.bbox = feature.bbox || null;
+    this.drillState.bbox = scope.bbox || null;
+    this.ngZone.run(() => this.areaScope.set(scope));
 
     if (fine) {
       this.map.flyTo({ center: feature.center, zoom: 17, pitch: 0, duration: 2400 });
     } else if (feature.bbox) {
       this.map.fitBounds(feature.bbox, { padding: 90, duration: 2400, maxZoom: type === 'neighborhood' ? 16 : 13 });
     } else {
-      this.map.flyTo({ center: feature.center, zoom: 13, duration: 2400 });
+      this.map.flyTo({ center: feature.center, zoom: 12, duration: 2400 });
     }
     void this.showArea(feature, fine);
   }
 
+  goToCoordinates(lat: number, lng: number): void {
+    const label = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    const bbox: [number, number, number, number] = [
+      Math.max(-180, lng - 0.35),
+      Math.max(-85, lat - 0.25),
+      Math.min(180, lng + 0.35),
+      Math.min(85, lat + 0.25)
+    ];
+    const synthetic: GeocodeFeature = {
+      text: label,
+      place_name: label,
+      center: [lng, lat],
+      bbox,
+      place_type: ['place']
+    };
+    this.goToFeature(synthetic);
+  }
+
   clearArea(): void {
     this.setArea({ type: 'FeatureCollection', features: [] }, '');
+    this.ngZone.run(() => this.areaScope.set(null));
     if (this.areaMarker) {
       this.areaMarker.remove();
       this.areaMarker = null;
@@ -988,6 +1034,61 @@ export class MapboxService {
     return ([v, h].filter(Boolean).join('-') || (pt.x < window.innerWidth / 2 ? 'left' : 'right')) as mapboxgl.Anchor;
   }
 
+  private formatFireComparison(frpVal: number, country: string, dateStr: string): string {
+    const features = this.hotspotsData?.features || [];
+    if (!features.length || !Number.isFinite(frpVal)) return '—';
+
+    const countryNorm = country.trim().toLowerCase();
+    const priorSameCountry: number[] = [];
+    const sameCountryAll: number[] = [];
+    const globalAll: number[] = [];
+
+    for (const f of features) {
+      const fp = f.properties;
+      const v = Number(fp.frp);
+      if (!Number.isFinite(v) || v <= 0) continue;
+      globalAll.push(v);
+      const fc = String(fp.country || '').trim().toLowerCase();
+      if (countryNorm && fc === countryNorm) {
+        sameCountryAll.push(v);
+        if (dateStr && fp.date < dateStr) priorSameCountry.push(v);
+      }
+    }
+
+    const pool =
+      priorSameCountry.length >= 3
+        ? priorSameCountry
+        : sameCountryAll.length >= 5
+          ? sameCountryAll
+          : globalAll;
+    if (!pool.length) return '—';
+
+    const sorted = pool.slice().sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median =
+      sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+
+    let below = 0;
+    for (const v of sorted) {
+      if (v <= frpVal) below++;
+    }
+    const pctTop = Math.max(1, Math.min(99, Math.round((1 - below / sorted.length) * 100)));
+    const diffPct = median > 0 ? Math.round(((frpVal - median) / median) * 100) : 0;
+    const sign = diffPct > 0 ? '+' : '';
+    const scopeText =
+      priorSameCountry.length >= 3
+        ? this.i18n.l(`días previos`, `prior days`)
+        : sameCountryAll.length >= 5
+          ? this.i18n.l(`mediana en zona`, `area median`)
+          : this.i18n.l(`mediana global`, `global median`);
+    const topLabel =
+      pctTop <= 25
+        ? ` · ${this.i18n.l(`Top ${pctTop}%`, `Top ${pctTop}%`)}`
+        : '';
+
+    return `${sign}${diffPct}% ${this.i18n.l('vs', 'vs')} ${scopeText} (${median.toFixed(1)} MW)${topLabel}`;
+  }
+
   private showPopup(
     feature: mapboxgl.GeoJSONFeature,
     lngLat: mapboxgl.LngLat,
@@ -1020,11 +1121,13 @@ export class MapboxService {
     const timeStr = String(p['time'] || '');
     const sensorStr = String(p['sensor'] || 'VIIRS');
     const confStr = String(p['confLabel'] || `${p['conf'] || 70}%`);
+    const cmpText = this.formatFireComparison(frpVal, String(p['country'] || ''), dateStr);
 
     const html = `<div class="pp" style="--c:${SEV_COLORS[sev]}"><div class="pp-h"><i></i>${esc(srcLabel)} · ${esc(sevName)}</div>
       <dl><dt>${this.i18n.l('Coordenadas', 'Coordinates')}</dt><dd>${c[1].toFixed(3)}, ${c[0].toFixed(3)}</dd>
       <dt>${this.i18n.l('País / Zona', 'Country / Area')}</dt><dd id="${id}">${esc(regionText)}</dd>
       <dt>FRP</dt><dd>${frpVal.toLocaleString(this.i18n.locale())} MW</dd>
+      <dt>${this.i18n.translate('Vs anteriores / base')}</dt><dd>${esc(cmpText)}</dd>
       <dt>${this.i18n.l('Detección', 'Detection')}</dt><dd>${esc(sensorStr)} · ${esc(dateStr)} ${esc(timeStr)} UTC</dd>
       <dt>${this.i18n.l('Confianza', 'Confidence')}</dt><dd>${esc(confStr)}</dd>
       <dt>Scan</dt><dd>${scanVal.toFixed(2)} km</dd></dl>

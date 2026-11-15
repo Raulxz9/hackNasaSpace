@@ -17,6 +17,8 @@ import {
 import { environment } from '../../../environments/environment';
 import {
   AlertHotspot,
+  AreaFilterScope,
+  HistorialAnualResponse,
   HotspotFeature,
   HotspotFeatureCollection,
   Incendio,
@@ -178,7 +180,44 @@ export class IncendiosApiService {
   private readonly dayCache = new Map<string, HotspotFeatureCollection>();
   private readonly summaryCache = new Map<string, ResumenCalendario>();
   private readonly yearSummaryCache = new Map<string, ResumenMesItem[]>();
+  private readonly historyCache = new Map<string, HistorialAnualResponse>();
   private readonly dayNumMemo = new Map<string, number>();
+
+  private resolveScope(scope?: AreaFilterScope | string | null): {
+    pais?: string;
+    north?: number;
+    south?: number;
+    east?: number;
+    west?: number;
+    key: string;
+  } {
+    if (!scope) return { key: 'global' };
+    if (typeof scope === 'string') {
+      const clean = scope.trim();
+      return clean ? { pais: clean, key: clean.toLowerCase() } : { key: 'global' };
+    }
+    const pais = scope.pais?.trim() || undefined;
+    const bbox = !scope.isCountry ? scope.bbox : null;
+    const bboxParts =
+      bbox && bbox.length === 4
+        ? {
+            west: Math.round(bbox[0] * 1000) / 1000,
+            south: Math.round(bbox[1] * 1000) / 1000,
+            east: Math.round(bbox[2] * 1000) / 1000,
+            north: Math.round(bbox[3] * 1000) / 1000
+          }
+        : null;
+    const bKey = bboxParts
+      ? `${bboxParts.south},${bboxParts.west},${bboxParts.north},${bboxParts.east}`
+      : '';
+    const pKey = pais ? pais.toLowerCase() : '';
+    const key = pKey && bKey ? `${pKey}@${bKey}` : pKey || (bKey ? `bbox:${bKey}` : 'global');
+    return {
+      pais,
+      ...(bboxParts || {}),
+      key
+    };
+  }
 
   private trackRequest<T>(obs$: Observable<T>): Observable<T> {
     this.activeRequests.update((n) => n + 1);
@@ -266,8 +305,9 @@ export class IncendiosApiService {
     return res.data?.length ?? 0;
   }
 
-  getCachedYearSummary(anioConsulta: number, pais?: string): ResumenMesItem[] | null {
-    const key = `${anioConsulta}:${(pais || 'global').toLowerCase()}`;
+  getCachedYearSummary(anioConsulta: number, scope?: AreaFilterScope | string | null): ResumenMesItem[] | null {
+    const { key: scopeKey } = this.resolveScope(scope);
+    const key = `${anioConsulta}:${scopeKey}`;
     return this.yearSummaryCache.get(key) || null;
   }
 
@@ -320,8 +360,9 @@ export class IncendiosApiService {
     );
   }
 
-  fetchMonthWithMeta(anio: number, mes: number, pais?: string): Observable<MonthHotspotsResult> {
-    const key = `${anio}-${String(mes).padStart(2, '0')}:${(pais || 'global').toLowerCase()}`;
+  fetchMonthWithMeta(anio: number, mes: number, scope?: AreaFilterScope | string | null): Observable<MonthHotspotsResult> {
+    const sc = this.resolveScope(scope);
+    const key = `${anio}-${String(mes).padStart(2, '0')}:${sc.key}`;
     const currentUtcYm = new Date().toISOString().slice(0, 7);
     const isCurrentMonth = `${anio}-${String(mes).padStart(2, '0')}` === currentUtcYm;
 
@@ -333,7 +374,11 @@ export class IncendiosApiService {
     return this.fetchIncendiosRaw({
       anioConsulta: anio,
       mesConsulta: mes,
-      pais
+      pais: sc.pais,
+      north: sc.north,
+      south: sc.south,
+      east: sc.east,
+      west: sc.west
     }).pipe(
       map((res) => {
         const fc = this.mapApiResponsesToGeoJson([res]);
@@ -360,20 +405,28 @@ export class IncendiosApiService {
     );
   }
 
-  fetchMonthHotspots(anio: number, mes: number, pais?: string): Observable<HotspotFeatureCollection> {
-    return this.fetchMonthWithMeta(anio, mes, pais).pipe(map((r) => r.fc));
+  fetchMonthHotspots(anio: number, mes: number, scope?: AreaFilterScope | string | null): Observable<HotspotFeatureCollection> {
+    return this.fetchMonthWithMeta(anio, mes, scope).pipe(map((r) => r.fc));
   }
 
-  fetchDayHotspots(fecha: string, pais?: string): Observable<HotspotFeatureCollection> {
+  fetchDayHotspots(fecha: string, scope?: AreaFilterScope | string | null): Observable<HotspotFeatureCollection> {
     const todayIso = new Date().toISOString().slice(0, 10);
     const isToday = fecha === todayIso;
-    const key = `${fecha}:${(pais || 'global').toLowerCase()}`;
+    const sc = this.resolveScope(scope);
+    const key = `${fecha}:${sc.key}`;
     const cached = this.dayCache.get(key);
     if (cached && !isToday) {
       return of(cached);
     }
 
-    return this.fetchIncendiosRaw({ fecha, pais }).pipe(
+    return this.fetchIncendiosRaw({
+      fecha,
+      pais: sc.pais,
+      north: sc.north,
+      south: sc.south,
+      east: sc.east,
+      west: sc.west
+    }).pipe(
       map((res) => {
         const fc = this.mapApiResponsesToGeoJson([res]);
         if (!isToday) {
@@ -399,11 +452,12 @@ export class IncendiosApiService {
   fetchResumen(
     anioConsulta: number,
     mesConsulta?: number,
-    pais?: string,
+    scope?: AreaFilterScope | string | null,
     modo?: 'rapido' | 'completo'
   ): Observable<ResumenCalendario> {
-    const yearKey = `${anioConsulta}:${(pais || 'global').toLowerCase()}`;
-    const key = `${anioConsulta}-${mesConsulta ?? 'all'}:${(pais || 'global').toLowerCase()}`;
+    const sc = this.resolveScope(scope);
+    const yearKey = `${anioConsulta}:${sc.key}`;
+    const key = `${anioConsulta}-${mesConsulta ?? 'all'}:${sc.key}`;
     const currentYear = new Date().getUTCFullYear();
     const cached = this.summaryCache.get(key);
     if (cached && anioConsulta < currentYear) {
@@ -414,8 +468,15 @@ export class IncendiosApiService {
     if (mesConsulta !== undefined) {
       params = params.set('mesConsulta', String(mesConsulta));
     }
-    if (pais) {
-      params = params.set('pais', pais);
+    if (sc.pais) {
+      params = params.set('pais', sc.pais);
+    }
+    if (sc.north !== undefined && sc.south !== undefined && sc.east !== undefined && sc.west !== undefined) {
+      params = params
+        .set('north', String(sc.north))
+        .set('south', String(sc.south))
+        .set('east', String(sc.east))
+        .set('west', String(sc.west));
     }
     if (modo === 'rapido') {
       params = params.set('modo', 'rapido');
@@ -445,6 +506,38 @@ export class IncendiosApiService {
       tap((res) => {
         if (anioConsulta < currentYear && !res.parcial) {
           this.summaryCache.set(key, res);
+        }
+      })
+    );
+  }
+
+  fetchAnnualHistory(scope?: AreaFilterScope | string | null): Observable<HistorialAnualResponse> {
+    const sc = this.resolveScope(scope);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const key = `${sc.key}:${todayIso}`;
+    const cached = this.historyCache.get(key);
+    if (cached && !cached.parcial) {
+      return of(cached);
+    }
+
+    let params = new HttpParams();
+    if (sc.pais) {
+      params = params.set('pais', sc.pais);
+    }
+    if (sc.north !== undefined && sc.south !== undefined && sc.east !== undefined && sc.west !== undefined) {
+      params = params
+        .set('north', String(sc.north))
+        .set('south', String(sc.south))
+        .set('east', String(sc.east))
+        .set('west', String(sc.west));
+    }
+
+    return this.trackRequest(
+      this.http.get<HistorialAnualResponse>(`${this.baseUrl}/api/incendios/historial-anual`, { params })
+    ).pipe(
+      tap((res) => {
+        if (!res.parcial) {
+          this.historyCache.set(key, res);
         }
       })
     );
