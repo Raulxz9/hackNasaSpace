@@ -19,7 +19,7 @@ export interface IrisEnvironment {
 
 export const environment: IrisEnvironment = {
   production: true,
-  apiUrl: 'https://hacknasaspace.onrender.com',
+  apiUrl: 'https://hacknasaspace-1.onrender.com',
   mapboxToken: 'pk.eyJ1IjoiMzUyMzExMDQzNCIsImEiOiJjbXdneXpybXUwNGJhMnpwdGFzbWJiODhxIn0.7lbpDTZa6dPpYccvQGv1ZA',
   mapboxStyles: {
     dark: 'mapbox://styles/mapbox/dark-v11',
