@@ -1,0 +1,5 @@
+@"
+.env
+iris-*.json
+node_modules/
+"@ | Out-File -Encoding ascii .\hackNasaSpace\Backend\.gitignore
