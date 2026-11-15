@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>IRIS | Infrared Remote Incident System</title>
+<meta name="theme-color" content="#0B1220">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600&family=Sora:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.19.1/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.19.1/mapbox-gl.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<div id="map" aria-label="Mapa global de focos de calor"></div>
+
+<!-- ========== Encabezado ========== -->
+<header class="bar glass">
+  <div class="brand">
+    <svg class="logo" viewBox="70 80 260 260" role="img" aria-label="Logo de IRIS">
+      <defs>
+        <clipPath id="hc"><path d="M92 210 Q200 70 308 210 Q200 350 92 210 Z">
+          <animate attributeName="d" dur="5s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.86;0.92;0.97;1" keySplines="0 0 1 1;0.4 0 0.2 1;0.4 0 0.2 1;0 0 1 1"
+            values="M92 210 Q200 70 308 210 Q200 350 92 210 Z;M92 210 Q200 70 308 210 Q200 350 92 210 Z;M92 210 Q200 210 308 210 Q200 210 92 210 Z;M92 210 Q200 70 308 210 Q200 350 92 210 Z;M92 210 Q200 70 308 210 Q200 350 92 210 Z"/>
+        </path></clipPath>
+      </defs>
+      <g class="lg-orbit">
+        <circle cx="200" cy="210" r="124" fill="none" stroke-width="6" stroke-dasharray="1 16" stroke-linecap="round" style="stroke:var(--accent)"/>
+        <g transform="translate(287.7 122.3) rotate(45)">
+          <rect x="-24" y="-5" width="14" height="10" rx="2" style="fill:var(--primary)"/><rect x="10" y="-5" width="14" height="10" rx="2" style="fill:var(--primary)"/>
+          <circle r="11" stroke-width="3" style="fill:var(--accent);stroke:var(--bg)"/>
+        </g>
+      </g>
+      <path d="M92 210 Q200 70 308 210 Q200 350 92 210 Z" style="fill:var(--surface)">
+        <animate attributeName="d" dur="5s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.86;0.92;0.97;1" keySplines="0 0 1 1;0.4 0 0.2 1;0.4 0 0.2 1;0 0 1 1"
+          values="M92 210 Q200 70 308 210 Q200 350 92 210 Z;M92 210 Q200 70 308 210 Q200 350 92 210 Z;M92 210 Q200 210 308 210 Q200 210 92 210 Z;M92 210 Q200 70 308 210 Q200 350 92 210 Z;M92 210 Q200 70 308 210 Q200 350 92 210 Z"/>
+      </path>
+      <g clip-path="url(#hc)">
+        <circle cx="200" cy="210" r="62" stroke-width="7" style="fill:var(--surface-2);stroke:var(--primary-hover)"/>
+        <g stroke-width="6" stroke-linecap="round" opacity=".5" style="stroke:var(--primary)">
+          <line x1="232" y1="210" x2="256" y2="210"/><line x1="227.7" y1="226" x2="248.5" y2="238"/><line x1="216" y1="237.7" x2="228" y2="258.5"/><line x1="200" y1="242" x2="200" y2="266"/><line x1="184" y1="237.7" x2="172" y2="258.5"/><line x1="172.3" y1="226" x2="151.5" y2="238"/><line x1="168" y1="210" x2="144" y2="210"/><line x1="172.3" y1="194" x2="151.5" y2="182"/><line x1="184" y1="182.3" x2="172" y2="161.5"/><line x1="200" y1="178" x2="200" y2="154"/><line x1="216" y1="182.3" x2="228" y2="161.5"/><line x1="227.7" y1="194" x2="248.5" y2="182"/>
+        </g>
+        <circle cx="200" cy="210" r="30" stroke-width="4" style="fill:var(--bg);stroke:var(--border)"/>
+        <g transform="translate(200 210) scale(0.6) translate(-200 -213)">
+          <path d="M200 182 C212 196 224 204 224 220 C224 234 213 244 200 244 C187 244 176 234 176 220 C176 210 182 204 188 198 C189 205 193 208 196 208 C194 198 196 189 200 182 Z" style="fill:var(--sev-3)"/>
+          <path d="M200 208 C207 216 213 221 213 230 C213 238 207 243 200 243 C193 243 187 238 187 230 C187 224 192 220 195 216 C196 220 198 221 199 221 C198 216 198 212 200 208 Z" style="fill:var(--accent)"/>
+        </g>
+      </g>
+      <path fill="none" stroke-width="10" stroke-linejoin="round" stroke-linecap="round" d="M92 210 Q200 70 308 210 Q200 350 92 210 Z" style="stroke:var(--primary)">
+        <animate attributeName="d" dur="5s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.86;0.92;0.97;1" keySplines="0 0 1 1;0.4 0 0.2 1;0.4 0 0.2 1;0 0 1 1"
+          values="M92 210 Q200 70 308 210 Q200 350 92 210 Z;M92 210 Q200 70 308 210 Q200 350 92 210 Z;M92 210 Q200 210 308 210 Q200 210 92 210 Z;M92 210 Q200 70 308 210 Q200 350 92 210 Z;M92 210 Q200 70 308 210 Q200 350 92 210 Z"/>
+      </path>
+    </svg>
+    <div>
+      <h1>IRIS</h1>
+      <p>Infrared Remote Incident System</p>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn live" id="btnLive" aria-pressed="true" title="Recibir focos nuevos en tiempo real"><span class="dot"></span>En vivo</button>
+    <button class="btn news" id="btnNews" aria-pressed="false" title="Mostrar focos nuevos en el mapa"><span class="lbl">Nuevo ⚠️</span></button>
+    <button class="btn" id="btnTl" aria-pressed="false" title="Línea del tiempo"><span>🕒</span><span class="tx">Línea del tiempo</span></button>
+    <button class="btn" id="btnPred" aria-pressed="false" title="Predicción de riesgo (experimental)"><span>🔮</span><span class="tx">Predicción</span></button>
+    <div class="langwrap">
+      <button class="btn lang" id="btnLang" aria-haspopup="menu" aria-expanded="false" aria-label="Lenguaje" title="Lenguaje"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg><span class="tx">Lenguaje</span><span class="car">▾</span></button>
+      <div class="lmenu glass" id="lmenu" role="menu" hidden><button role="menuitemradio" data-l="es" aria-checked="true">Español</button><button role="menuitemradio" data-l="en" aria-checked="false">English</button></div>
+    </div>
+    <div class="search" id="search">
+      <input id="q" type="text" placeholder="Lugar o coordenadas (19.04, -98.2)" aria-label="Buscar lugar o coordenadas" autocomplete="off">
+      <button class="btn icon" id="btnSearch" aria-label="Buscar" title="Buscar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+      </button>
+      <div class="sug glass" id="sug" hidden></div>
+    </div>
+  </div>
+</header>
+
+<!-- ========== Zoom ========== -->
+<div class="zoom glass" role="group" aria-label="Zoom">
+  <button id="zin" aria-label="Acercar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+  <button id="zout" aria-label="Alejar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
+</div>
+
+<!-- ========== Globo / mapa plano ========== -->
+<div class="viewsw glass" role="group" aria-label="Tipo de vista">
+  <button id="vGlobe" aria-pressed="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg>
+    <span>Globo</span>
+  </button>
+  <button id="vFlat" aria-pressed="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5 9 4l6 2.5L21 4v13.5L15 20l-6-2.5L3 20z"/><path d="M9 4v13.5M15 6.5V20"/></svg>
+    <span>Mapa</span>
+  </button>
+</div>
+
+<!-- ========== Ajustes ========== -->
+<button class="fab glass" id="btnSettings" aria-expanded="false" aria-controls="settings" aria-label="Ajustes" title="Ajustes">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.2 5.2L3.5 17.5a1.8 1.8 0 0 0 2.5 2.5l6-6a4 4 0 0 0 5.2-5.2l-2.4 2.4-2.3-.6-.6-2.3z"/></svg>
+</button>
+
+<section class="panel glass" id="settings" hidden aria-label="Ajustes">
+  <h2>Mapa</h2>
+  <div class="row"><label for="sStyle">Estilo base</label></div>
+  <select id="sStyle" autocomplete="off">
+    <option value="dark">Oscuro</option>
+    <option value="sat">Satélite</option>
+    <option value="terrain" selected>Terreno</option>
+  </select>
+  <div class="row"><label for="sHeat">Manchas de calor (en vez de puntos)</label><input id="sHeat" type="checkbox" checked autocomplete="off"></div>
+
+  <div class="row"><label for="sBorders">Resaltar fronteras y costas</label><input id="sBorders" type="checkbox" checked></div>
+  <div class="row"><label for="sAlerts">Avisos de focos nuevos</label><input id="sAlerts" type="checkbox" checked></div>
+
+  <h2>Focos</h2>
+  <div class="row"><label for="rSize">Tamaño</label><input id="rSize" type="range" min="0.5" max="3" step="0.1" value="1"><output id="vSize">100%</output></div>
+  <div class="row"><label for="rOp">Opacidad</label><input id="rOp" type="range" min="0.1" max="1" step="0.05" value="0.95"><output id="vOp">95%</output></div>
+
+  <h2>Movimiento</h2>
+  <div class="row"><label for="mSpin">Rotación automática del globo</label><input id="mSpin" type="checkbox" checked></div>
+
+  <h2>Mapbox</h2>
+  <div class="inline"><input id="sToken" type="text" placeholder="pk.eyJ1Ijoi..." aria-label="Token de Mapbox" autocomplete="off"><button class="btn" id="btnToken">Guardar</button></div>
+  <p class="hint">Al guardar, la página se recarga con el nuevo token.</p>
+
+  <button class="btn reset" id="btnReset">Restablecer vista</button>
+</section>
+
+<button class="fab glass" id="btnFilters" aria-expanded="false" aria-label="Filtros" title="Filtros">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v6l-4-2v-4z"/></svg>
+</button>
+<section class="panel glass" id="filters" hidden aria-label="Filtros"></section>
+<div id="alerts" aria-live="polite"></div>
+<div class="area glass" id="areaChip" hidden>📍 <span id="areaName"></span><button id="areaX" aria-label="Quitar zona">✕</button></div>
+
+<section class="tl glass" id="tl" hidden aria-label="Línea del tiempo">
+  <div class="tl-h"><div><h2>🕒 Línea del tiempo</h2><p>Elige un año y un mes. Si quieres, también un día.</p></div>
+    <div class="tl-b"><button class="btn glow" data-a="play" id="tlP">▶ Reproducir mes</button><button class="btn" data-a="peak">🔥 Ir al foco más intenso</button><button class="btn" data-a="exit">✕ Volver a hoy</button></div></div>
+  <div class="tl-l">1 · Año</div><div class="tl-y" id="tlY"></div>
+  <div class="tl-l">2 · Mes</div><div class="tl-m" id="tlM"></div>
+  <div class="tl-l">3 · Día <small>(opcional)</small></div><div class="tl-d" id="tlD"></div>
+  <div class="tl-s" id="tlS"></div>
+</section>
+
+<section class="panel glass pr" id="pred" hidden aria-label="Predicción experimental">
+  <h2>🔮 Predicción de riesgo <em class="beta">Experimental</em></h2>
+  <p class="hint">Calcula el riesgo de incendio en la zona del centro del mapa. Por ahora usa una ecuación de prueba; después se conectará al back-end.</p>
+  <div id="prF"></div>
+  <div class="inline"><button class="btn primary" id="prGo">Calcular aquí</button><button class="btn" id="prOff">Quitar del mapa</button></div>
+  <div id="prOut"></div>
+  <details><summary>Ver la ecuación</summary><pre>z = −0.4 + 0.09·(T−28) + 0.04·(35−H) + 0.04·(V−15)
+    + 0.10·(D−7) + 1.5·(S−0.5) + 0.5·ln(1+F)
+riesgo = 100 / (1 + e^−z)</pre><p class="hint">T temperatura · H humedad · V viento · D días sin lluvia · S vegetación seca · F focos cercanos</p></details>
+</section>
+
+<dialog id="askDlg">
+  <h2>Reproducción terminada</h2>
+  <p>¿Te gustaría ver el listado más detallado de los incendios de este mes?</p>
+  <div class="actions"><button class="btn" id="askNo">No, gracias</button><button class="btn primary" id="askYes">Sí, ver listado</button></div>
+</dialog>
+
+<dialog id="listDlg">
+  <div class="ld-h"><div><h2>📋 Listado de incendios</h2><p id="ldSub"></p></div><button class="btn icon" id="ldX" aria-label="Cerrar">✕</button></div>
+  <div class="ld-c"><label for="ldDay">Día</label><select id="ldDay"></select>
+    <span class="ld-dl"><button class="btn" data-f="xlsx">⬇ Excel</button><button class="btn" data-f="doc">⬇ Word</button><button class="btn" data-f="csv">⬇ CSV</button><button class="btn" data-f="json">⬇ JSON</button></span></div>
+  <div class="lt"><table id="ldT"></table></div>
+</dialog>
+
+<footer class="foot glass"><span class="cp">© 2026 IRIS · Datos de demostración</span><span class="pos"><span>Coordenadas</span> <b id="coords">—</b></span><button class="lnk" id="btnTerms">Términos y condiciones</button><span class="cred">Mapas © Mapbox · © OpenStreetMap · NASA FIRMS</span></footer>
+
+<dialog id="termsDlg">
+  <h2>Términos y condiciones</h2>
+  <div class="terms">
+    <h3>1. Uso informativo</h3><p>IRIS muestra focos de calor con fines informativos. No sustituye a protección civil, bomberos ni a ninguna autoridad. En una emergencia llama al número oficial de tu país (en México, 911).</p>
+    <h3>2. Datos de demostración</h3><p>Mientras no se conecte la fuente real (NASA FIRMS u otra), los focos, la línea del tiempo y la predicción son simulados y no representan incendios reales.</p>
+    <h3>3. Precisión</h3><p>Los datos satelitales pueden tener retraso, errores de ubicación o falsos positivos (por ejemplo fábricas o volcanes). No tomes decisiones de seguridad basándote solo en IRIS.</p>
+    <h3>4. Predicción experimental</h3><p>La predicción de riesgo es una función de prueba. Su resultado es una estimación y puede ser incorrecto.</p>
+    <h3>5. Privacidad</h3><p>El token de Mapbox se guarda solo en tu navegador. Las búsquedas de lugares se envían a Mapbox y a OpenStreetMap para obtener resultados.</p>
+    <h3>6. Responsabilidad</h3><p>El servicio se ofrece «tal cual», sin garantías. Los autores no se hacen responsables por daños derivados de su uso.</p>
+    <h3>7. Cambios</h3><p>Estos términos pueden actualizarse. Seguir usando IRIS implica aceptar la versión vigente.</p>
+    <p class="hint" style="color:var(--text-muted)">Texto base de ejemplo: pide que lo revise un abogado antes de publicar.</p>
+  </div>
+  <div class="actions"><button class="btn primary" onclick="this.closest('dialog').close()">Entendido</button></div>
+</dialog>
+<!-- ========== Leyenda ========== -->
+
+<!-- ========== Calendario y reloj ========== -->
+<div id="toast" role="status" aria-live="polite"></div>
+
+<!-- ========== Diálogos ========== -->
+<dialog id="tokenDlg">
+  <h2>Conecta tu mapa</h2>
+  <p>IRIS usa Mapbox para dibujar el globo. Pega tu token público (empieza con <b>pk.</b>) para continuar. Se guarda solo en este navegador.</p>
+  <p><a href="https://account.mapbox.com/access-tokens/" target="_blank" rel="noopener">Obtener un token en Mapbox</a></p>
+  <input id="dToken" type="text" placeholder="pk.eyJ1Ijoi..." aria-label="Token de Mapbox" autocomplete="off">
+  <div class="actions"><button class="btn primary" id="dTokenSave">Guardar y abrir el mapa</button></div>
+</dialog>
+
+<script src="js/app.js"></script>
+</body>
+</html>
