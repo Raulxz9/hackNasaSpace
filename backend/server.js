@@ -1005,10 +1005,10 @@ async function cargarPaisesFirms() {
                 const codigo = String(p.iso1A3).toUpperCase();
                 const slug = ISO3_A_GCS_SLUG[codigo] || sanitizarSlugPais(p.nameEn);
                 const nombre = slug.replace(/_/g, ' ');
-                const entry = { codigo, nombre, slug };
+                const iso2 = p.iso1A2 ? String(p.iso1A2).toUpperCase() : '';
+                const entry = { codigo, iso2, nombre, nameEn: String(p.nameEn || nombre), slug };
                 porCodigo.set(codigo, entry);
-                if (p.iso1A2) {
-                    const iso2 = String(p.iso1A2).toUpperCase();
+                if (iso2) {
                     if (!porCodigo.has(iso2)) porCodigo.set(iso2, entry);
                 }
                 porNombre.set(normalizar(nombre), entry);
@@ -2319,7 +2319,7 @@ app.get('/', (req, res) => {
         res.json({
             status: 'ok',
             servicio: 'API de Incendios NASA FIRMS + GCS (MODIS + VIIRS)',
-            endpoints: ['/api/incendios', '/api/incendios/resumen', '/api/health']
+            endpoints: ['/api/incendios', '/api/incendios/resumen', '/api/incendios/historial-anual', '/api/paises', '/api/health']
         });
     } catch (error) {
         logError('GET /', error);
@@ -2333,6 +2333,28 @@ app.get('/api/health', (req, res) => {
     } catch (error) {
         logError('GET /api/health', error);
         res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
+
+app.get('/api/paises', async (req, res) => {
+    try {
+        const { porCodigo } = await cargarPaisesFirms();
+        const vistos = new Map();
+        for (const item of porCodigo.values()) {
+            if (!item || !item.codigo || vistos.has(item.codigo)) continue;
+            vistos.set(item.codigo, {
+                codigo: item.codigo,
+                iso2: item.iso2 || '',
+                nombre: item.nameEn || item.nombre,
+                nombreGcs: item.nombre
+            });
+        }
+        const paises = Array.from(vistos.values()).sort((a, b) => a.nombre.localeCompare(b.nombre));
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return await enviarJson(req, res, { total: paises.length, paises });
+    } catch (error) {
+        logError('GET /api/paises', error);
+        res.status(500).json({ error: 'No se pudo cargar el catálogo de países' });
     }
 });
 

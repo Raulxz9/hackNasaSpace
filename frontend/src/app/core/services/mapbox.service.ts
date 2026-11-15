@@ -520,6 +520,52 @@ export class MapboxService {
     this.drillState.bbox = null;
   }
 
+  applyExternalScope(scope: AreaFilterScope | null): void {
+    if (!scope || !scope.name) {
+      this.clearArea();
+      this.resetView();
+      return;
+    }
+    const cur = this.areaScope();
+    if (cur && cur.name === scope.name && cur.pais === scope.pais) {
+      return;
+    }
+    this.stopSpin();
+    this.drillState.level = scope.isCountry ? 0 : 2;
+    this.drillState.bbox = scope.bbox || null;
+    this.ngZone.run(() => this.areaScope.set(scope));
+    this.setArea({ type: 'FeatureCollection', features: [] }, scope.name);
+    if (scope.bbox && this.map) {
+      this.map.fitBounds(scope.bbox, { padding: 80, duration: 2200, maxZoom: scope.isCountry ? 6 : 12 });
+      return;
+    }
+    if (!this.map) return;
+    fetch(
+      `https://nominatim.openstreetmap.org/search?format=jsonv2&polygon_geojson=1&polygon_threshold=0.0008&limit=1&accept-language=${this.i18n.lang()}&q=${encodeURIComponent(scope.name)}`
+    )
+      .then((res) => res.json())
+      .then((list: Array<{ boundingbox?: [string, string, string, string]; geojson?: { type: string; coordinates: unknown } }>) => {
+        const hit = list?.[0];
+        if (!hit || this.areaScope()?.name !== scope.name) return;
+        if (hit.boundingbox?.length === 4 && this.map) {
+          const [s, n, w, e] = hit.boundingbox.map(Number);
+          if ([s, n, w, e].every(Number.isFinite)) {
+            const box: [number, number, number, number] = [w, s, e, n];
+            this.drillState.bbox = box;
+            this.ngZone.run(() => this.areaScope.set({ ...scope, bbox: box }));
+            this.map.fitBounds(box, { padding: 70, duration: 2200, maxZoom: 6 });
+          }
+        }
+        if (hit.geojson && /Polygon/.test(hit.geojson.type)) {
+          this.setArea(
+            { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: hit.geojson }] },
+            scope.name
+          );
+        }
+      })
+      .catch(() => {});
+  }
+
   getAreaBox(): [number, number, number, number] | null {
     if (this.drillState.bbox) return this.drillState.bbox;
     const first = this.areaGeoJson.features[0] as { geometry?: { coordinates?: unknown } } | undefined;

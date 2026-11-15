@@ -210,6 +210,13 @@ export interface AreaFilterScope {
   isCountry?: boolean;
 }
 
+export interface PaisCatalogoItem {
+  codigo: string;
+  iso2?: string;
+  nombre: string;
+  nombreGcs?: string;
+}
+
 export interface Filtros {
   severidades: Set<SeveridadNivel>;
   origenes: Set<OrigenCalor>;

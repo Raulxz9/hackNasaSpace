@@ -4,8 +4,6 @@
   [class.playing]="playing()"
   [hidden]="!open()"
   [attr.aria-label]="i18n.translate('Línea del tiempo')"
-  (mouseenter)="onTimelineMouseEnter()"
-  (mouseleave)="onTimelineMouseLeave()"
 >
   <div class="tl-bar">
     <div class="tl-ttl">
@@ -74,27 +72,6 @@
 
     <div class="tl-ac">
       <button
-        class="btn"
-        id="tlHist"
-        data-a="hist"
-        [title]="i18n.translate('Historial de incendios (2000–presente)')"
-        (click)="openHistoryDialog()"
-      >
-        <span>📊</span><span class="tx">{{ i18n.l('2000–hoy', '2000–now') }}</span>
-      </button>
-
-      <button
-        class="btn"
-        id="tlDt"
-        data-a="dayt"
-        [attr.aria-pressed]="drawerOpen()"
-        [title]="i18n.translate('Elegir un día (opcional)')"
-        (click)="toggleDayDrawer()"
-      >
-        <span>📅</span><span class="tx">{{ i18n.translate('Día') }}</span>
-      </button>
-
-      <button
         class="btn glow"
         id="tlDl"
         [attr.data-a]="playing() ? 'play' : 'dl'"
@@ -118,7 +95,7 @@
     </div>
   </div>
 
-  <div class="tl-dr" id="tlDr" [hidden]="!drawerOpen()">
+  <div class="tl-dr" id="tlDr">
     <div #dayList class="tl-d" id="tlD">
       <button
         class="all"
@@ -162,11 +139,6 @@
           <b [style.color]="sevColors[peakLevel()]">{{ i18n.sevNames()[peakLevel()] }}</b>
           @if (medianComparison(); as med) {
             · {{ i18n.l('Vs mediana', 'Vs median') }}: <b>{{ med.deltaPct >= 0 ? '+' : '' }}{{ med.deltaPct }}%</b>
-          } @else if (historicalComparison(); as hc) {
-            @if (hc.monthDeltaPct !== null) {
-              · {{ i18n.l('Vs prom. 2000–hoy', 'Vs 2000–now baseline') }}:
-              <b>{{ hc.monthDeltaPct >= 0 ? '+' : '' }}{{ hc.monthDeltaPct }}%</b>
-            }
           }
           @if (historialAnual(); as hist) {
             @if (hist.anioPico; as pkY) {
@@ -223,7 +195,7 @@
   </div>
 
   <div class="tl-mn glass" id="tlMn" [hidden]="!moreMenuOpen()" role="menu">
-    <button role="menuitem" data-a="hist" (click)="openHistoryDialog()">{{ i18n.translate('📊 Historial 2000–hoy') }}</button>
+    <button role="menuitem" data-a="hist" (click)="onMenuHistory()">{{ i18n.translate('📊 Historial') }}</button>
     <button role="menuitem" data-a="play" (click)="onMenuPlay()">
       {{ playing() ? i18n.translate('⏸ Pausar') : i18n.translate('▶ Reproducir mes') }}
     </button>
@@ -233,159 +205,6 @@
     <button role="menuitem" data-a="exit" (click)="onMenuExit()">{{ i18n.translate('✕ Volver a hoy') }}</button>
   </div>
 </section>
-
-<dialog #histDlg id="histDlg" class="glass">
-  <div class="hd-h">
-    <div>
-      <h2>📊 {{ i18n.translate('Historial de incendios (2000–presente)') }}</h2>
-      <p>
-        📍 <b>{{ areaLabel() }}</b> · MODIS + VIIRS (2000–{{ currentYear }})
-        @if (loadingHistorial()) {
-          · <span class="hd-load">{{ i18n.l('Analizando serie histórica…', 'Analyzing historical archive…') }}</span>
-        }
-      </p>
-    </div>
-    <div class="hd-actions">
-      <button class="btn" id="hdExportCsv" (click)="exportCsv.emit()">⬇ CSV</button>
-      <button class="btn icon" id="hdClose" [attr.aria-label]="i18n.translate('Cerrar')" (click)="closeHistoryDialog()">✕</button>
-    </div>
-  </div>
-
-  @if (loadingHistorial() && !historialAnual()) {
-    <div class="hd-empty">{{ i18n.l('Calculando actividad histórica de incendios desde el 2000…', 'Computing fire activity history since 2000…') }}</div>
-  } @else if (historialAnual(); as hist) {
-    <div class="hd-kpis">
-      <div class="hd-kpi">
-        <span>{{ i18n.translate('Años con más actividad (desde 2000)') }}</span>
-        @if (hist.anioPico; as pkY) {
-          <b>#1 · {{ pkY.anio }} ({{ pkY.totalFocos.toLocaleString(i18n.locale()) }})</b>
-          <div class="hd-chips">
-            @for (ty of hist.topAnios.slice(0, 4); track ty.anio; let r = $index) {
-              <button (click)="jumpToHistoryYear(ty.anio)" [class.active]="ty.anio === selectedYear()">
-                #{{ r + 1 }} {{ ty.anio }} ({{ ty.totalFocos.toLocaleString(i18n.locale()) }})
-              </button>
-            }
-          </div>
-        } @else {
-          <b>—</b>
-        }
-      </div>
-
-      <div class="hd-kpi">
-        <span>{{ i18n.translate('Meses y temporadas con más incendios') }}</span>
-        @if (hist.mesPicoEstacional; as pkM) {
-          <b>{{ i18n.meses()[pkM.mes - 1] }} (~{{ Math.round(pkM.promedioAnual).toLocaleString(i18n.locale()) }}/{{ i18n.l('año', 'yr') }})</b>
-          <div class="hd-chips">
-            @for (tm of hist.topMesesEstacionales.slice(0, 3); track tm.mes) {
-              <button (click)="jumpToHistoryMonth(tm.mes)" [class.active]="tm.mes === selectedMonth()">
-                {{ i18n.meses()[tm.mes - 1].slice(0, 3) }} · ~{{ Math.round(tm.promedioAnual).toLocaleString(i18n.locale()) }}
-              </button>
-            }
-          </div>
-        } @else {
-          <b>—</b>
-        }
-      </div>
-
-      <div class="hd-kpi">
-        <span>{{ i18n.translate('Comparativa actual vs periodos anteriores') }}</span>
-        @if (historicalComparison(); as cmp) {
-          <b>
-            {{ selectedYear() }}:
-            @if (cmp.yearRank) {
-              #{{ cmp.yearRank }}/{{ cmp.yearsTotalWithData }}
-            } @else {
-              —
-            }
-            @if (cmp.yearDeltaPct !== null) {
-              ({{ cmp.yearDeltaPct >= 0 ? '+' : '' }}{{ cmp.yearDeltaPct }}% {{ i18n.l('vs prom.', 'vs avg') }})
-            }
-          </b>
-          <small>
-            {{ i18n.meses()[selectedMonth() - 1] }}:
-            {{ cmp.monthTotal.toLocaleString(i18n.locale()) }}
-            @if (cmp.monthMedian > 0) {
-              ({{ i18n.l('mediana', 'median') }} {{ cmp.monthMedian.toLocaleString(i18n.locale()) }}
-              @if (cmp.monthDeltaPct !== null) {
-                · {{ cmp.monthDeltaPct >= 0 ? '+' : '' }}{{ cmp.monthDeltaPct }}%
-              })
-            }
-          </small>
-        }
-      </div>
-
-      <div class="hd-kpi">
-        <span>{{ i18n.translate('Total histórico') }}</span>
-        <b>{{ hist.totalHistorico.toLocaleString(i18n.locale()) }} {{ i18n.l('focos', 'hotspots') }}</b>
-        <small>
-          {{ i18n.translate('Promedio anual') }}: {{ Math.round(hist.promedioAnual).toLocaleString(i18n.locale()) }} ·
-          {{ i18n.translate('Mediana anual') }}: {{ Math.round(hist.medianaAnual).toLocaleString(i18n.locale()) }}
-        </small>
-      </div>
-    </div>
-
-    <div class="hd-legend">
-      <span>{{ i18n.translate('Rampa de actividad') }}:</span>
-      <span class="tl-ramp">
-        <small>{{ i18n.translate('Menos') }}</small>
-        @for (c of legendStops; track c) {
-          <i [style.background]="c"></i>
-        }
-        <small>{{ i18n.translate('Más') }}</small>
-      </span>
-      <small class="hd-hint">{{ i18n.l('Haz clic en cualquier año o mes para inspeccionarlo en el mapa.', 'Click any year or month to inspect it on the map.') }}</small>
-    </div>
-
-    <div class="hd-sec">
-      <h3>{{ i18n.translate('Actividad por año (2000–presente)') }}</h3>
-      <div class="hd-years">
-        @for (yItem of yearPickerItems(); track yItem.anio) {
-          <button
-            class="hd-ybar"
-            [class.active]="yItem.anio === selectedYear()"
-            [class.peak-y]="yItem.isTopYear"
-            [style.--t]="yItem.intensityNorm.toFixed(2)"
-            [style.--rc]="yItem.rampHex"
-            [title]="yItem.anio + ': ' + yItem.totalFocos.toLocaleString(i18n.locale()) + ' ' + i18n.l('focos', 'hotspots')"
-            (click)="jumpToHistoryYear(yItem.anio)"
-          >
-            <div class="hd-bar-track">
-              <i class="hd-bar-fill" [style.height.%]="yItem.totalFocos > 0 ? Math.max(8, Math.round(yItem.intensityNorm * 100)) : 2"></i>
-            </div>
-            <span class="hd-y-num">{{ yItem.anio }}@if (yItem.isTopYear) {★}</span>
-            <small class="hd-y-cnt">{{ yItem.totalFocos >= 1000 ? (yItem.totalFocos / 1000).toFixed(1) + 'k' : yItem.totalFocos }}</small>
-          </button>
-        }
-      </div>
-    </div>
-
-    <div class="hd-sec">
-      <h3>{{ i18n.translate('Patrón estacional por mes (2000–presente)') }}</h3>
-      <div class="hd-months">
-        @for (sm of seasonalMonthCells(); track sm.mes) {
-          <button
-            class="hd-mcell"
-            [class.active]="sm.mes === selectedMonth()"
-            [class.peak-m]="sm.isTopSeason"
-            [style.--t]="sm.intensityNorm.toFixed(2)"
-            [style.--rc]="sm.rampHex"
-            (click)="jumpToHistoryMonth(sm.mes)"
-          >
-            <b>{{ sm.shortLabel }}@if (sm.isTopSeason) { ★}</b>
-            <span>~{{ sm.promedioAnual.toLocaleString(i18n.locale()) }}</span>
-            <small>
-              @if (sm.anioPico > 0) {
-                {{ i18n.l('Pico', 'Peak') }}: {{ sm.anioPico }}
-              } @else {
-                —
-              }
-            </small>
-          </button>
-        }
-      </div>
-    </div>
-  }
-</dialog>
 
 <dialog #askDlg id="askDlg">
   <h2>{{ i18n.translate('Reproducción terminada') }}</h2>

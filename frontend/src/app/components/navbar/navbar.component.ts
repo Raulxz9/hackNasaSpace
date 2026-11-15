@@ -32,6 +32,7 @@ export class NavbarComponent {
   readonly toggleLive = output<void>();
   readonly toggleWarn = output<void>();
   readonly toggleTimeline = output<void>();
+  readonly openHistory = output<void>();
   readonly togglePrediction = output<void>();
   readonly languageChanged = output<IdiomaCodigo>();
   readonly notifyToast = output<{ message: string; isError?: boolean }>();

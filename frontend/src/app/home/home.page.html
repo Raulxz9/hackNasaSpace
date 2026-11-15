@@ -17,6 +17,7 @@
     (toggleLive)="onToggleLive()"
     (toggleWarn)="onToggleWarn()"
     (toggleTimeline)="onToggleTimeline()"
+    (openHistory)="onOpenHistoryDialog()"
     (togglePrediction)="onTogglePrediction()"
     (dropdownBottomChange)="alertsTopPx.set($event)"
     (notifyToast)="showToast($event)"
@@ -54,7 +55,6 @@
     [monthTruncated]="timelineMonthTruncated()"
     [usingDefaultFilters]="usingDefaultFilters()"
     [historialAnual]="historialAnual()"
-    [loadingHistorial]="loadingHistorial()"
     [areaLabel]="areaLabel()"
     (selectYear)="onSelectTimelineYear($event)"
     (selectMonth)="onSelectTimelineMonth($event)"
@@ -64,7 +64,16 @@
     (goPeak)="onGoTimelinePeak()"
     (exportCsv)="onExportCsv()"
     (exitTimeline)="onExitTimeline()"
-    (requestHistoryRefresh)="onEnsureAnnualHistory()"
+    (openHistory)="onOpenHistoryDialog()"
+    (notifyToast)="showToast($event)"
+  />
+
+  <app-fire-history-dialog
+    #historyDlg
+    [mapScope]="mapbox.areaScope()"
+    [initialYear]="timelineYear()"
+    [initialMonth]="timelineMonth()"
+    (applyToMap)="onApplyHistoryToMap($event)"
     (notifyToast)="showToast($event)"
   />
 

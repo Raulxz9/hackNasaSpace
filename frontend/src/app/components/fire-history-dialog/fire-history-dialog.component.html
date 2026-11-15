@@ -1,0 +1,415 @@
+<dialog #histDlg id="histDlg" class="glass">
+  <div class="hd-h">
+    <div>
+      <h2>📊 {{ i18n.translate('Historial de incendios (2000–presente)') }}</h2>
+      <p>
+        MODIS + VIIRS (2000–{{ currentYear }}) · {{ i18n.l('Busca país, compara entre países o entre distintos años de un mismo país.', 'Search countries, compare regions, or compare different years of the same country.') }}
+      </p>
+    </div>
+    <div class="hd-actions">
+      @if (loadedSeries().length > 0) {
+        <button class="btn" id="hdExportCsv" (click)="exportComparisonCsv()">⬇ CSV</button>
+      }
+      <button class="btn icon" id="hdClose" [attr.aria-label]="i18n.translate('Cerrar')" (click)="closeModal()">✕</button>
+    </div>
+  </div>
+
+  <!-- Barra unificada de búsqueda y filtros -->
+  <div class="hd-builder">
+    <!-- País o zona principal con búsqueda escribiendo -->
+    <div class="hd-field hd-combo hd-combo-primary">
+      <label for="hdPrimaryInput">{{ i18n.l('País o zona principal', 'Primary country or area') }}</label>
+      <div class="hd-input-wrap">
+        <input
+          #primaryInputEl
+          id="hdPrimaryInput"
+          type="text"
+          autocomplete="off"
+          role="combobox"
+          [attr.aria-expanded]="primaryOpen()"
+          [value]="primaryOpen() ? primaryQuery() : selectedPrimaryLabel()"
+          [placeholder]="primaryOpen() ? selectedPrimaryLabel() + ' — ' + i18n.l('escribe para buscar…', 'type to search…') : ''"
+          (focus)="onPrimaryFocus()"
+          (input)="onPrimaryInput($event)"
+          (keydown)="onPrimaryKeyDown($event)"
+        />
+        <button
+          type="button"
+          class="hd-combo-ico"
+          [attr.aria-label]="i18n.l('Buscar país', 'Search country')"
+          (mousedown)="onPrimaryIconToggle($event)"
+        >{{ primaryOpen() ? '✕' : '🔍' }}</button>
+      </div>
+      @if (primaryOpen()) {
+        <div class="hd-suggest glass" id="hdPrimarySuggest" role="listbox">
+          @for (opt of primaryFilterResult().items; track opt.key; let i = $index) {
+            <button
+              type="button"
+              role="option"
+              class="hd-sopt"
+              [class.hi]="i === primaryHiIdx()"
+              [class.selected]="opt.key === draftPrimaryKey()"
+              (mousedown)="$event.preventDefault(); selectPrimaryTarget(opt)"
+            >{{ opt.label }}</button>
+          } @empty {
+            <div class="hd-sempty">{{ i18n.l('Sin coincidencias para esa búsqueda', 'No matching countries found') }}</div>
+          }
+          @if (primaryFilterResult().totalMatches > primaryFilterResult().items.length) {
+            <div class="hd-shint">
+              {{ i18n.l('Mostrando', 'Showing') }} {{ primaryFilterResult().items.length }} {{ i18n.l('de', 'of') }} {{ primaryFilterResult().totalMatches }} · {{ i18n.l('escribe para filtrar', 'type to filter') }}
+            </div>
+          }
+        </div>
+      }
+    </div>
+
+    <!-- Comparar con otros países (búsqueda escribiendo) -->
+    <div class="hd-field hd-combo hd-combo-compare">
+      <label for="hdCompareInput">{{ i18n.l('Comparar con otros países', 'Compare countries') }}</label>
+      <div class="hd-input-wrap">
+        <input
+          #compareInputEl
+          id="hdCompareInput"
+          type="text"
+          autocomplete="off"
+          role="combobox"
+          [disabled]="draftCompareChips().length >= 3"
+          [attr.aria-expanded]="compareOpen()"
+          [value]="compareQuery()"
+          [placeholder]="draftCompareChips().length >= 3 ? i18n.l('Máximo 3 adicionales', 'Max 3 added') : i18n.l('+ Escribir país a comparar…', '+ Type country to compare…')"
+          (focus)="onCompareFocus()"
+          (input)="onCompareInput($event)"
+          (keydown)="onCompareKeyDown($event)"
+        />
+        <span class="hd-combo-ico">＋</span>
+      </div>
+      @if (compareOpen()) {
+        <div class="hd-suggest glass" id="hdCompareSuggest" role="listbox">
+          @for (opt of compareFilterResult().items; track opt.key; let i = $index) {
+            <button
+              type="button"
+              role="option"
+              class="hd-sopt"
+              [class.hi]="i === compareHiIdx()"
+              (mousedown)="$event.preventDefault(); selectCompareTarget(opt)"
+            >{{ opt.label }}</button>
+          } @empty {
+            <div class="hd-sempty">{{ i18n.l('Sin coincidencias', 'No matches') }}</div>
+          }
+          @if (compareFilterResult().totalMatches > compareFilterResult().items.length) {
+            <div class="hd-shint">
+              {{ i18n.l('Mostrando', 'Showing') }} {{ compareFilterResult().items.length }} {{ i18n.l('de', 'of') }} {{ compareFilterResult().totalMatches }} · {{ i18n.l('escribe nombre o ISO', 'type name or ISO code') }}
+            </div>
+          }
+        </div>
+      }
+    </div>
+
+    <!-- Año enfoque -->
+    <div class="hd-field hd-sm">
+      <label for="hdFocusYear">{{ i18n.l('Año base', 'Focus year') }}</label>
+      <select id="hdFocusYear" [value]="focusYear()" (change)="onFocusYearChange($event)">
+        @for (y of years.slice().reverse(); track y) {
+          <option [value]="y" [selected]="y === focusYear()">{{ y }}</option>
+        }
+      </select>
+    </div>
+
+    <!-- Comparar con otro año del mismo país (0 consultas extra) -->
+    <div class="hd-field hd-cy">
+      <label for="hdCompareYearAdd">{{ i18n.l('Comparar con año', 'Compare year') }}</label>
+      <select id="hdCompareYearAdd" [disabled]="compareYears().length >= 3" (change)="onAddCompareYearChange($event)">
+        <option value="">{{ i18n.l('+ Otro año…', '+ Other year…') }}</option>
+        @for (y of availableCompareYears(); track y) {
+          <option [value]="y">{{ y }}</option>
+        }
+      </select>
+    </div>
+
+    <!-- Rango de meses -->
+    <div class="hd-field hd-range-pair">
+      <label for="hdRangeFrom">{{ i18n.l('Meses', 'Months') }}</label>
+      <div class="hd-pair">
+        <select id="hdRangeFrom" [value]="rangeFrom()" [attr.aria-label]="i18n.l('Desde mes', 'From month')" (change)="onRangeFromChange($event)">
+          @for (m of monthIndices; track m; let idx = $index) {
+            <option [value]="m" [selected]="m === rangeFrom()">{{ i18n.meses()[idx].slice(0, 3) }}</option>
+          }
+        </select>
+        <span>→</span>
+        <select id="hdRangeTo" [value]="rangeTo()" [attr.aria-label]="i18n.l('Hasta mes', 'To month')" (change)="onRangeToChange($event)">
+          @for (m of monthIndices; track m; let idx = $index) {
+            <option [value]="m" [selected]="m === rangeTo()">{{ i18n.meses()[idx].slice(0, 3) }}</option>
+          }
+        </select>
+      </div>
+    </div>
+
+    <div class="hd-run">
+      <button
+        class="btn"
+        [class.primary]="hasPendingQueryChanges()"
+        id="hdConsultBtn"
+        [disabled]="loading()"
+        (click)="runConsultation()"
+      >
+        @if (loading()) {
+          ⏳ {{ i18n.l('Consultando…', 'Analyzing…') }}
+        } @else if (hasPendingQueryChanges()) {
+          🔍 {{ i18n.l('Consultar', 'Analyze') }}
+        } @else {
+          ✓ {{ i18n.l('Actualizado', 'Up to date') }}
+        }
+      </button>
+    </div>
+  </div>
+
+  <!-- Chips activos (países y años comparados) + Presets rápidos de rango -->
+  <div class="hd-subbar">
+    <div class="hd-cmp-chips">
+      @for (chip of draftCompareChips(); track chip.key) {
+        <span class="hd-chip">
+          {{ chip.label }}
+          <button type="button" [attr.aria-label]="i18n.translate('Cerrar')" (click)="removeCompareKey(chip.key)">✕</button>
+        </span>
+      }
+      @for (cy of compareYears(); track cy) {
+        <span class="hd-chip hd-ychip">
+          📅 {{ cy }}
+          <button type="button" [attr.aria-label]="i18n.translate('Cerrar')" (click)="removeCompareYear(cy)">✕</button>
+        </span>
+      }
+      @if (compareYears().length === 0 && quickSuggestedCompareYear(); as sug) {
+        <button type="button" class="hd-qyr" id="hdQuickCompareYear" (click)="addCompareYear(sug.year)">
+          ＋ {{ focusYear() }} {{ sug.label }}
+        </button>
+      }
+    </div>
+    <div class="hd-presets">
+      @for (p of quickRangePresets; track p.id) {
+        <button
+          type="button"
+          [class.active]="rangeFrom() === p.from && rangeTo() === p.to"
+          (click)="applyQuickRange(p.from, p.to)"
+        >{{ i18n.lang() === 'en' ? p.en : p.es }}</button>
+      }
+    </div>
+  </div>
+
+  @if (loading() && loadedSeries().length === 0) {
+    <div class="hd-empty">{{ i18n.l('Consultando serie histórica de incendios (2000–presente)…', 'Querying historical fire archive (2000–present)…') }}</div>
+  } @else if (loadedSeries().length === 0) {
+    <div class="hd-empty">{{ i18n.l('Elige un país o zona y pulsa Consultar para analizar y comparar.', 'Choose a country or area and click Analyze to explore and compare.') }}</div>
+  } @else {
+    <!-- MODO A: Comparativa por años seleccionados (e.g. México 2026 vs México 2019) -->
+    @if (isComparingYears()) {
+      <div class="hd-kpis hd-kpis-cmp">
+        @for (item of periodComparisonItems(); track item.id) {
+          <div class="hd-kpi" [style.--sc]="item.color">
+            <div class="hd-kpi-top">
+              <span class="hd-kpi-name"><i [style.background]="item.color"></i>{{ item.title }}</span>
+              <button
+                class="hd-map-btn"
+                (click)="viewPeriodOnMap(item.scope, item.year, item.peakMonthInRange)"
+                [title]="i18n.l('Ver este año y país en el mapa 3D', 'View this year and country on the 3D map')"
+              >
+                🗺 {{ i18n.l('Ver mapa', 'Map') }}
+              </button>
+            </div>
+            <b>
+              {{ item.rangeTotal.toLocaleString(i18n.locale()) }} {{ i18n.l('focos', 'hotspots') }}
+              <small class="hd-rng-tag">({{ rangeLabel() }})</small>
+            </b>
+            <small>
+              @if (item.vsFirstPct !== null) {
+                <b>{{ item.vsFirstPct >= 0 ? '+' : '' }}{{ item.vsFirstPct }}%</b> vs {{ periodComparisonItems()[0].title }}
+                @if (item.vsHistPct !== null) {
+                  · {{ item.vsHistPct >= 0 ? '+' : '' }}{{ item.vsHistPct }}% {{ i18n.l('vs prom.', 'vs avg') }}
+                }
+              } @else {
+                @if (item.vsHistPct !== null) {
+                  <b>{{ item.vsHistPct >= 0 ? '+' : '' }}{{ item.vsHistPct }}%</b> {{ i18n.l('vs prom. histórico', 'vs hist. avg') }}
+                } @else {
+                  {{ i18n.l('Referencia base', 'Reference period') }}
+                }
+              }
+            </small>
+            <small>
+              {{ i18n.l('Año completo', 'Full year') }}: <b>{{ item.annualTotal.toLocaleString(i18n.locale()) }}</b>
+              @if (item.peakMonthCount > 0) {
+                · {{ i18n.l('Mes pico', 'Peak month') }}: <b>{{ i18n.meses()[item.peakMonthInRange - 1].slice(0, 3) }}</b> ({{ item.peakMonthCount.toLocaleString(i18n.locale()) }})
+              }
+            </small>
+          </div>
+        }
+      </div>
+
+      <div class="hd-legend">
+        <div class="hd-series-leg">
+          @for (item of periodComparisonItems(); track item.id) {
+            <span><i [style.background]="item.color"></i>{{ item.title }}</span>
+          }
+        </div>
+        <div class="hd-scale-sw">
+          <button [class.active]="scaleMode() === 'abs'" (click)="scaleMode.set('abs')">{{ i18n.l('Absoluta', 'Absolute') }}</button>
+          <button [class.active]="scaleMode() === 'norm'" (click)="scaleMode.set('norm')">{{ i18n.l('Relativa (%)', 'Relative (%)') }}</button>
+        </div>
+        <small class="hd-hint">{{ i18n.l('Comparar años del mismo país es instantáneo y no realiza nuevas consultas.', 'Comparing years of the same country is instant with zero extra queries.') }}</small>
+      </div>
+
+      <!-- Gráfica agrupada mes a mes (Ene–Dic) comparando los años elegidos -->
+      <div class="hd-sec">
+        <h3>
+          {{ i18n.l('Comparativa mes a mes entre años', 'Month-by-month year comparison') }} · {{ activeYears().join(' vs ') }}
+        </h3>
+        <div class="hd-mchart">
+          @for (col of monthlyComparisonChart().cols; track col.mes) {
+            <button
+              type="button"
+              class="hd-ybar hd-mcol"
+              [class.dimmed]="!col.inRange"
+              [class.active]="col.inRange && rangeFrom() === rangeTo() && col.mes === rangeFrom()"
+              [title]="col.tooltip"
+              (click)="onSelectMonthInMatrix(col.mes)"
+            >
+              <div class="hd-bar-track hd-bar-group hd-mtrack">
+                @for (b of col.bars; track b.id) {
+                  <i class="hd-bar-fill" [style.height.%]="b.pct" [style.background]="b.color"></i>
+                }
+              </div>
+              <span class="hd-y-num">{{ col.shortLabel }}</span>
+              <small class="hd-y-cnt">{{ col.primaryVal >= 1000 ? (col.primaryVal / 1000).toFixed(1) + 'k' : col.primaryVal }}</small>
+            </button>
+          }
+        </div>
+      </div>
+    } @else {
+      <!-- MODO B: Tarjetas comparativas por país/zona -->
+      <div class="hd-kpis hd-kpis-cmp">
+        @for (sum of seriesSummaries(); track sum.key) {
+          <div class="hd-kpi" [style.--sc]="sum.color">
+            <div class="hd-kpi-top">
+              <span class="hd-kpi-name"><i [style.background]="sum.color"></i>{{ sum.label }}</span>
+              <button class="hd-map-btn" (click)="viewPeriodOnMap(sum.scope, focusYear())" [title]="i18n.l('Cargar este país y periodo en el mapa 3D', 'Load this country and period on the 3D map')">
+                🗺 {{ i18n.l('Ver mapa', 'Map') }}
+              </button>
+            </div>
+            <b>
+              {{ sum.totalRange.toLocaleString(i18n.locale()) }} {{ i18n.l('focos', 'hotspots') }}
+              <small class="hd-rng-tag">({{ rangeLabel() }})</small>
+            </b>
+            <small>
+              {{ focusYear() }}: <b>{{ sum.focusTotal.toLocaleString(i18n.locale()) }}</b>
+              @if (sum.focusDeltaPct !== null) {
+                ({{ sum.focusDeltaPct >= 0 ? '+' : '' }}{{ sum.focusDeltaPct }}% {{ i18n.l('vs prom.', 'vs avg') }})
+              }
+              @if (sum.vsPrimaryPct !== null) {
+                · <b>{{ sum.vsPrimaryPct >= 0 ? '+' : '' }}{{ sum.vsPrimaryPct }}%</b> vs {{ seriesSummaries()[0].label.split(',')[0] }}
+              }
+            </small>
+            <small>
+              @if (sum.peakYear; as pkY) {
+                {{ i18n.translate('Año pico') }}: <b>{{ pkY.anio }}</b> ({{ pkY.rangeTotal.toLocaleString(i18n.locale()) }})
+              }
+              @if (sum.peakSeasonMonth > 0) {
+                · {{ i18n.l('Mes pico', 'Peak month') }}: <b>{{ i18n.meses()[sum.peakSeasonMonth - 1].slice(0, 3) }}</b>
+              }
+            </small>
+          </div>
+        }
+      </div>
+
+      <div class="hd-legend">
+        @if (loadedSeries().length === 1) {
+          <span>{{ i18n.translate('Rampa de actividad') }}:</span>
+          <span class="tl-ramp">
+            <small>{{ i18n.translate('Menos') }}</small>
+            @for (c of legendStops; track c) {
+              <i [style.background]="c"></i>
+            }
+            <small>{{ i18n.translate('Más') }}</small>
+          </span>
+        } @else {
+          <div class="hd-series-leg">
+            @for (sum of seriesSummaries(); track sum.key) {
+              <span><i [style.background]="sum.color"></i>{{ sum.label }}</span>
+            }
+          </div>
+          <div class="hd-scale-sw">
+            <button [class.active]="scaleMode() === 'abs'" (click)="scaleMode.set('abs')">{{ i18n.l('Absoluta', 'Absolute') }}</button>
+            <button [class.active]="scaleMode() === 'norm'" (click)="scaleMode.set('norm')">{{ i18n.l('Relativa (%)', 'Relative (%)') }}</button>
+          </div>
+        }
+        <small class="hd-hint">{{ i18n.l('Cambiar año, comparar años del país o rango de meses no genera consultas extra.', 'Changing year, comparing years, or adjusting month range uses zero extra queries.') }}</small>
+      </div>
+    }
+
+    <!-- Gráfica anual 2000–presente -->
+    <div class="hd-sec">
+      <h3>
+        {{ i18n.l('Comparativa anual (2000–presente)', 'Annual comparison (2000–present)') }} · {{ rangeLabel() }}
+      </h3>
+      <div class="hd-years">
+        @for (row of yearlyChartData().rows; track row.anio) {
+          <button
+            class="hd-ybar"
+            [class.active]="row.anio === focusYear()"
+            [class.cmp-y]="row.isComparedYear"
+            [class.peak-y]="row.isPeakPrimary"
+            [style.--cc]="row.compareColor"
+            [title]="row.tooltip"
+            (click)="selectFocusYear(row.anio)"
+          >
+            <div class="hd-bar-track hd-bar-group">
+              @for (b of row.bars; track b.key) {
+                <i class="hd-bar-fill" [style.height.%]="b.pct" [style.background]="b.color"></i>
+              }
+            </div>
+            <span class="hd-y-num">{{ row.anio }}@if (row.isPeakPrimary) {★}</span>
+            <small class="hd-y-cnt">
+              {{ row.primaryValue >= 1000 ? (row.primaryValue / 1000).toFixed(1) + 'k' : row.primaryValue }}
+            </small>
+          </button>
+        }
+      </div>
+    </div>
+
+    <!-- Matriz térmica de 12 meses (exacta por año al comparar años, o promedio histórico 2000–hoy) -->
+    <div class="hd-sec">
+      <h3>
+        @if (isComparingYears()) {
+          {{ i18n.l('Matriz térmica mensual exacta por año comparado', 'Exact monthly thermal matrix by compared year') }}
+        } @else {
+          {{ i18n.translate('Patrón estacional por mes (2000–presente)') }}
+        }
+        <small>· {{ i18n.l('Haz clic en un mes para ajustar el rango', 'Click a month to adjust range') }}</small>
+      </h3>
+      <div class="hd-matrix">
+        @for (row of matrixRows(); track row.key) {
+          <div class="hd-mrow">
+            @if (matrixRows().length > 1) {
+              <div class="hd-mlabel"><i [style.background]="row.color"></i>{{ row.label }}</div>
+            }
+            <div class="hd-months">
+              @for (cell of row.cells; track cell.mes) {
+                <button
+                  class="hd-mcell"
+                  [class.active]="cell.inRange"
+                  [class.dimmed]="!cell.inRange"
+                  [class.peak-m]="cell.isPeakCell"
+                  [style.--t]="cell.norm.toFixed(2)"
+                  [style.--rc]="cell.rampHex"
+                  [title]="cell.tooltip"
+                  (click)="onSelectMonthInMatrix(cell.mes)"
+                >
+                  <b>{{ cell.shortLabel }}@if (cell.isPeakCell) { ★}</b>
+                  <span>{{ cell.primaryNum }}</span>
+                  <small>{{ cell.subText }}</small>
+                </button>
+              }
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+  }
+</dialog>

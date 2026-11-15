@@ -25,6 +25,7 @@ import {
   IncendiosApiResponse,
   IncendiosQueryParams,
   OrigenCalor,
+  PaisCatalogoItem,
   RawIncendioRecord,
   ResumenCalendario,
   ResumenMesItem,
@@ -181,6 +182,7 @@ export class IncendiosApiService {
   private readonly summaryCache = new Map<string, ResumenCalendario>();
   private readonly yearSummaryCache = new Map<string, ResumenMesItem[]>();
   private readonly historyCache = new Map<string, HistorialAnualResponse>();
+  private countriesCache: PaisCatalogoItem[] | null = null;
   private readonly dayNumMemo = new Map<string, number>();
 
   private resolveScope(scope?: AreaFilterScope | string | null): {
@@ -508,6 +510,27 @@ export class IncendiosApiService {
           this.summaryCache.set(key, res);
         }
       })
+    );
+  }
+
+  getCachedAnnualHistory(scope?: AreaFilterScope | string | null): HistorialAnualResponse | null {
+    const sc = this.resolveScope(scope);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    return this.historyCache.get(`${sc.key}:${todayIso}`) || null;
+  }
+
+  fetchCountries(): Observable<PaisCatalogoItem[]> {
+    if (this.countriesCache) {
+      return of(this.countriesCache);
+    }
+    return this.trackRequest(
+      this.http.get<{ total: number; paises: PaisCatalogoItem[] }>(`${this.baseUrl}/api/paises`)
+    ).pipe(
+      map((res) => (Array.isArray(res?.paises) ? res.paises : [])),
+      tap((list) => {
+        if (list.length > 0) this.countriesCache = list;
+      }),
+      catchError(() => of([]))
     );
   }
 

@@ -27,6 +27,9 @@ import {
   I18nService,
   IncendiosApiService,
   MapboxService,
+  THERMAL_LEGEND_STOPS,
+  computeThermalLogNorm,
+  computeThermalRampColor,
   dayNumFromUtcDate
 } from '../../core/services';
 
@@ -61,7 +64,6 @@ export class TimelineCalendarComponent implements OnDestroy {
   readonly monthTruncated = input<boolean>(false);
   readonly usingDefaultFilters = input<boolean>(true);
   readonly historialAnual = input<HistorialAnualResponse | null>(null);
-  readonly loadingHistorial = input<boolean>(false);
   readonly areaLabel = input<string>('Global');
 
   readonly selectYear = output<number>();
@@ -72,7 +74,7 @@ export class TimelineCalendarComponent implements OnDestroy {
   readonly goPeak = output<void>();
   readonly exportCsv = output<void>();
   readonly exitTimeline = output<void>();
-  readonly requestHistoryRefresh = output<void>();
+  readonly openHistory = output<void>();
   readonly notifyToast = output<{ message: string; isError?: boolean }>();
 
   @ViewChild('yearList') yearList?: ElementRef<HTMLElement>;
@@ -81,7 +83,6 @@ export class TimelineCalendarComponent implements OnDestroy {
   @ViewChild('askDlg') askDlg?: ElementRef<HTMLDialogElement>;
   @ViewChild('listDlg') listDlg?: ElementRef<HTMLDialogElement>;
   @ViewChild('dlDlg') dlDlg?: ElementRef<HTMLDialogElement>;
-  @ViewChild('histDlg') histDlg?: ElementRef<HTMLDialogElement>;
 
   readonly nowUtc = new Date();
   readonly currentYear = Math.max(2026, this.nowUtc.getUTCFullYear());
@@ -105,12 +106,9 @@ export class TimelineCalendarComponent implements OnDestroy {
   readonly playing = signal(false);
   readonly listOpen = signal(false);
   readonly listDayFilter = signal<number>(0);
-  readonly dayDrawerUserOpen = signal(true);
   readonly yearPopOpen = signal(false);
   readonly moreMenuOpen = signal(false);
   readonly severities: SeveridadNivel[] = [1, 2, 3, 4, 5];
-
-  readonly drawerOpen = computed(() => this.dayDrawerUserOpen() || this.playing());
 
   readonly dlBox = signal<[number, number, number, number] | null>(null);
   readonly dlRegionName = signal<string>('');
@@ -120,11 +118,7 @@ export class TimelineCalendarComponent implements OnDestroy {
   readonly dlBusy = signal<boolean>(false);
 
   private playTimer: ReturnType<typeof setInterval> | null = null;
-  private collapseTimer: ReturnType<typeof setTimeout> | null = null;
   private dlSub: Subscription | null = null;
-  private hovered = false;
-  private readonly supportsHover =
-    typeof window !== 'undefined' && window.matchMedia('(hover: hover)').matches;
 
   readonly sevColors: Record<SeveridadNivel, string> = {
     1: '#FACC15',
@@ -138,43 +132,7 @@ export class TimelineCalendarComponent implements OnDestroy {
     new Date(Date.UTC(this.selectedYear(), this.selectedMonth(), 0)).getUTCDate()
   );
 
-  private readonly rampStops: ReadonlyArray<[number, number, number, number]> = [
-    [0.0, 56, 189, 248],  // cyan #38BDF8
-    [0.28, 45, 212, 191], // teal #2DD4BF
-    [0.52, 250, 204, 21], // amber #FACC15
-    [0.76, 251, 146, 60], // orange #FB923C
-    [1.0, 239, 68, 68]    // red #EF4444
-  ];
-
-  readonly legendStops = [
-    'rgb(56, 189, 248)',
-    'rgb(45, 212, 191)',
-    'rgb(250, 204, 21)',
-    'rgb(251, 146, 60)',
-    'rgb(239, 68, 68)'
-  ];
-
-  private computeLogNorm(value: number, maxVal: number): number {
-    if (value <= 0 || maxVal <= 0) return 0;
-    return Math.max(0.14, Math.min(1, Math.log1p(value) / Math.log1p(maxVal)));
-  }
-
-  private rampColor(norm: number): string {
-    if (norm <= 0 || !Number.isFinite(norm)) return 'rgba(148, 160, 186, 0.28)';
-    const t = Math.max(0, Math.min(1, norm));
-    for (let i = 1; i < this.rampStops.length; i++) {
-      const [t1, r1, g1, b1] = this.rampStops[i];
-      if (t <= t1 || i === this.rampStops.length - 1) {
-        const [t0, r0, g0, b0] = this.rampStops[i - 1];
-        const f = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
-        const r = Math.round(r0 + (r1 - r0) * f);
-        const g = Math.round(g0 + (g1 - g0) * f);
-        const b = Math.round(b0 + (b1 - b0) * f);
-        return `rgb(${r}, ${g}, ${b})`;
-      }
-    }
-    return 'rgb(239, 68, 68)';
-  }
+  readonly legendStops = THERMAL_LEGEND_STOPS;
 
   readonly monthlyItems = computed<
     Array<ResumenMesItem & { intensityNorm: number; rampHex: string; isPeakMonth: boolean; isSeasonalPeak: boolean; seasonalAvg: number }>
@@ -203,12 +161,12 @@ export class TimelineCalendarComponent implements OnDestroy {
         intensidadMaxima: 'Sin datos',
         nivelMaximo: 0
       };
-      const norm = this.computeLogNorm(item.totalFocos, maxVal);
+      const norm = computeThermalLogNorm(item.totalFocos, maxVal);
       const seasonalAvg = hist?.porMes?.[idx]?.promedioAnual ?? 0;
       return {
         ...item,
         intensityNorm: norm,
-        rampHex: this.rampColor(norm),
+        rampHex: computeThermalRampColor(norm),
         isPeakMonth: m === yearPeakMonth && item.totalFocos > 0,
         isSeasonalPeak: seasonalTopSet.has(m),
         seasonalAvg: Math.round(seasonalAvg)
@@ -242,7 +200,7 @@ export class TimelineCalendarComponent implements OnDestroy {
       const d = i + 1;
       const existing = byDay.get(d);
       const total = existing?.totalFocos ?? featCounts.get(d) ?? 0;
-      const norm = this.computeLogNorm(total, maxVal);
+      const norm = computeThermalLogNorm(total, maxVal);
       return {
         dia: d,
         fecha: existing?.fecha ?? `${y}-${mStr}-${String(d).padStart(2, '0')}`,
@@ -251,109 +209,9 @@ export class TimelineCalendarComponent implements OnDestroy {
         intensidadMaxima: existing?.intensidadMaxima ?? 'Sin datos',
         nivelMaximo: existing?.nivelMaximo ?? 0,
         intensityNorm: norm,
-        rampHex: this.rampColor(norm)
+        rampHex: computeThermalRampColor(norm)
       };
     });
-  });
-
-  readonly yearPickerItems = computed<
-    Array<{ anio: number; totalFocos: number; intensityNorm: number; rampHex: string; isTopYear: boolean; rank: number; mesPico: number }>
-  >(() => {
-    const hist = this.historialAnual();
-    const byYear = new Map(hist?.porAnio.map((y) => [y.anio, y]) || []);
-    const ranked = (hist?.porAnio || [])
-      .filter((y) => y.totalFocos > 0)
-      .slice()
-      .sort((a, b) => b.totalFocos - a.totalFocos);
-    const rankMap = new Map<number, number>();
-    ranked.forEach((y, idx) => rankMap.set(y.anio, idx + 1));
-    const maxYear = Math.max(1, ...ranked.map((y) => y.totalFocos));
-
-    return this.years.map((anio) => {
-      const item = byYear.get(anio);
-      const total = item?.totalFocos || 0;
-      const norm = this.computeLogNorm(total, maxYear);
-      const rank = rankMap.get(anio) || 0;
-      return {
-        anio,
-        totalFocos: total,
-        intensityNorm: norm,
-        rampHex: this.rampColor(norm),
-        isTopYear: rank > 0 && rank <= 3,
-        rank,
-        mesPico: item?.mesPico || 0
-      };
-    });
-  });
-
-  readonly seasonalMonthCells = computed(() => {
-    const hist = this.historialAnual();
-    const list = hist?.porMes || [];
-    const maxAvg = Math.max(1, ...list.map((m) => m.promedioAnual || 0));
-    return Array.from({ length: 12 }, (_, idx) => {
-      const mNum = idx + 1;
-      const item = list[idx];
-      const avg = item?.promedioAnual || 0;
-      const med = item?.medianaAnual || 0;
-      const norm = this.computeLogNorm(avg, maxAvg);
-      const isTop = (hist?.topMesesEstacionales || []).slice(0, 3).some((tm) => tm.mes === mNum);
-      return {
-        mes: mNum,
-        shortLabel: this.i18n.meses()[idx].slice(0, 3),
-        fullLabel: this.i18n.meses()[idx],
-        promedioAnual: Math.round(avg),
-        medianaAnual: Math.round(med),
-        maxAnual: item?.maxAnual || 0,
-        anioPico: item?.anioPico || 0,
-        totalFocos: item?.totalFocos || 0,
-        intensityNorm: norm,
-        rampHex: this.rampColor(norm),
-        isTopSeason: isTop
-      };
-    });
-  });
-
-  readonly historicalComparison = computed(() => {
-    const hist = this.historialAnual();
-    if (!hist) return null;
-    const selYear = this.selectedYear();
-    const selMonth = this.selectedMonth();
-    const selYearObj = hist.porAnio.find((y) => y.anio === selYear) || null;
-    const rankedYears = hist.porAnio
-      .filter((y) => y.totalFocos > 0)
-      .slice()
-      .sort((a, b) => b.totalFocos - a.totalFocos);
-    const yearRankIdx = rankedYears.findIndex((y) => y.anio === selYear);
-    const yearTotal = selYearObj?.totalFocos || 0;
-    const yearDeltaPct =
-      hist.promedioAnual > 0 && yearTotal > 0
-        ? Math.round(((yearTotal - hist.promedioAnual) / hist.promedioAnual) * 100)
-        : null;
-
-    const monthSeason = hist.porMes[selMonth - 1] || null;
-    const currentMonthTotal =
-      this.dailyItems().reduce((acc, d) => acc + d.totalFocos, 0) ||
-      this.resumen()?.resumenMensual?.[selMonth - 1]?.totalFocos ||
-      selYearObj?.meses?.[selMonth - 1] ||
-      0;
-    const monthBaseline = monthSeason?.medianaAnual || monthSeason?.promedioAnual || 0;
-    const monthDeltaPct =
-      monthBaseline > 0 && currentMonthTotal > 0
-        ? Math.round(((currentMonthTotal - monthBaseline) / monthBaseline) * 100)
-        : null;
-
-    return {
-      yearTotal,
-      yearRank: yearRankIdx >= 0 ? yearRankIdx + 1 : null,
-      yearsTotalWithData: rankedYears.length,
-      yearDeltaPct,
-      monthTotal: currentMonthTotal,
-      monthAvg: Math.round(monthSeason?.promedioAnual || 0),
-      monthMedian: Math.round(monthSeason?.medianaAnual || 0),
-      monthDeltaPct,
-      monthAnioPico: monthSeason?.anioPico || 0,
-      monthMaxAnual: monthSeason?.maxAnual || 0
-    };
   });
 
   readonly sevCounts = computed<Record<SeveridadNivel, number>>(() => {
@@ -471,6 +329,34 @@ export class TimelineCalendarComponent implements OnDestroy {
 
   readonly listTotalCount = computed(() => this.sortedListFeatures().length);
 
+  readonly yearPickerItems = computed<
+    Array<{ anio: number; totalFocos: number; intensityNorm: number; rampHex: string; isTopYear: boolean; rank: number }>
+  >(() => {
+    const hist = this.historialAnual();
+    const byYear = new Map(hist?.porAnio.map((y) => [y.anio, y]) || []);
+    const ranked = (hist?.porAnio || [])
+      .filter((y) => y.totalFocos > 0)
+      .slice()
+      .sort((a, b) => b.totalFocos - a.totalFocos);
+    const rankMap = new Map<number, number>();
+    ranked.forEach((y, idx) => rankMap.set(y.anio, idx + 1));
+    const maxYear = Math.max(1, ...ranked.map((y) => y.totalFocos));
+
+    return this.years.map((anio) => {
+      const total = byYear.get(anio)?.totalFocos || 0;
+      const norm = computeThermalLogNorm(total, maxYear);
+      const rank = rankMap.get(anio) || 0;
+      return {
+        anio,
+        totalFocos: total,
+        intensityNorm: norm,
+        rampHex: computeThermalRampColor(norm),
+        isTopYear: rank > 0 && rank <= 3,
+        rank
+      };
+    });
+  });
+
   readonly displayedListRows = computed<ListRow[]>(() =>
     this.mapFeaturesToListRows(this.sortedListFeatures().slice(0, 1500))
   );
@@ -479,13 +365,9 @@ export class TimelineCalendarComponent implements OnDestroy {
     effect(() => {
       if (this.open()) {
         document.body.classList.add('tl-open');
-        this.dayDrawerUserOpen.set(true);
-        this.hovered = false;
-        this.armAutoCollapse(3500);
       } else {
         document.body.classList.remove('tl-open');
         this.hidePopovers();
-        this.clearCollapseTimer();
         this.stopPlayback();
       }
     });
@@ -502,7 +384,7 @@ export class TimelineCalendarComponent implements OnDestroy {
 
     effect(() => {
       const selDay = this.selectedDay();
-      if (this.drawerOpen() && selDay > 0) {
+      if (this.open() && selDay > 0) {
         setTimeout(() => {
           const activeDay = this.dayList?.nativeElement.querySelector('[aria-pressed="true"]:not(.all)');
           activeDay?.scrollIntoView({ inline: 'center', block: 'nearest' });
@@ -526,7 +408,6 @@ export class TimelineCalendarComponent implements OnDestroy {
   }
 
   ngOnDestroy(): void {
-    this.clearCollapseTimer();
     this.stopPlayback();
     this.dlSub?.unsubscribe();
     document.body.classList.remove('tl-open');
@@ -560,39 +441,6 @@ export class TimelineCalendarComponent implements OnDestroy {
     return rows;
   }
 
-  private clearCollapseTimer(): void {
-    if (this.collapseTimer) {
-      clearTimeout(this.collapseTimer);
-      this.collapseTimer = null;
-    }
-  }
-
-  private armAutoCollapse(ms: number): void {
-    this.clearCollapseTimer();
-    if (!this.supportsHover) return;
-    this.collapseTimer = setTimeout(() => {
-      if (!this.open() || !this.dayDrawerUserOpen() || this.hovered) return;
-      if (this.playing() || this.yearPopOpen() || this.moreMenuOpen()) {
-        this.armAutoCollapse(800);
-        return;
-      }
-      this.dayDrawerUserOpen.set(false);
-    }, ms);
-  }
-
-  onTimelineMouseEnter(): void {
-    this.hovered = true;
-    this.clearCollapseTimer();
-    if (!this.dayDrawerUserOpen()) {
-      this.dayDrawerUserOpen.set(true);
-    }
-  }
-
-  onTimelineMouseLeave(): void {
-    this.hovered = false;
-    this.armAutoCollapse(450);
-  }
-
   private hidePopovers(): void {
     this.yearPopOpen.set(false);
     this.moreMenuOpen.set(false);
@@ -616,16 +464,6 @@ export class TimelineCalendarComponent implements OnDestroy {
     const next = !this.moreMenuOpen();
     this.hidePopovers();
     this.moreMenuOpen.set(next);
-  }
-
-  toggleDayDrawer(): void {
-    this.hidePopovers();
-    const next = !this.dayDrawerUserOpen();
-    this.dayDrawerUserOpen.set(next);
-    if (!next && this.selectedDay() > 0) {
-      this.stopPlayback();
-      this.selectDay.emit(0);
-    }
   }
 
   isFutureMonth(monthNum: number): boolean {
@@ -664,8 +502,12 @@ export class TimelineCalendarComponent implements OnDestroy {
     if (dayNum > 0 && this.isFutureDay(dayNum)) return;
     this.hidePopovers();
     this.stopPlayback();
-    this.dayDrawerUserOpen.set(true);
     this.selectDay.emit(dayNum);
+  }
+
+  onMenuHistory(): void {
+    this.hidePopovers();
+    this.openHistory.emit();
   }
 
   onMenuPlay(): void {
@@ -701,7 +543,6 @@ export class TimelineCalendarComponent implements OnDestroy {
         : this.daysInSelectedMonth();
 
     let cur = this.selectedDay() && this.selectedDay() < lastDay ? this.selectedDay() : 1;
-    this.dayDrawerUserOpen.set(true);
     this.playing.set(true);
     this.playingChange.emit(true);
     this.playStep.emit(cur);
@@ -727,28 +568,6 @@ export class TimelineCalendarComponent implements OnDestroy {
     this.playing.set(false);
     if (wasPlaying) {
       this.playingChange.emit(false);
-    }
-  }
-
-  openHistoryDialog(): void {
-    this.hidePopovers();
-    this.requestHistoryRefresh.emit();
-    this.histDlg?.nativeElement.showModal();
-  }
-
-  closeHistoryDialog(): void {
-    this.histDlg?.nativeElement.close();
-  }
-
-  jumpToHistoryYear(year: number): void {
-    this.histDlg?.nativeElement.close();
-    this.onPickYear(year);
-  }
-
-  jumpToHistoryMonth(monthNum: number): void {
-    this.histDlg?.nativeElement.close();
-    if (!this.isFutureMonth(monthNum)) {
-      this.onPickMonth(monthNum);
     }
   }
 

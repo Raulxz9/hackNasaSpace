@@ -4,7 +4,9 @@ import { IonContent } from '@ionic/angular';
 import { Subscription } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
+  ApplyPeriodEvent,
   FiltersPanelComponent,
+  FireHistoryDialogComponent,
   FooterBarComponent,
   HotspotToastComponent,
   MapGlobeComponent,
@@ -47,6 +49,7 @@ import {
     FiltersPanelComponent,
     MapSettingsPanelComponent,
     TimelineCalendarComponent,
+    FireHistoryDialogComponent,
     RiskPredictionPanelComponent,
     HotspotToastComponent,
     FooterBarComponent
@@ -61,6 +64,7 @@ export class HomePage implements OnDestroy {
 
   @ViewChild('tokenDlg') tokenDlg?: ElementRef<HTMLDialogElement>;
   @ViewChild('timelineCal') timelineCal?: TimelineCalendarComponent;
+  @ViewChild('historyDlg') historyDlg?: FireHistoryDialogComponent;
 
   private readonly reduceMotion =
     typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -118,7 +122,6 @@ export class HomePage implements OnDestroy {
   readonly playbackActive = signal<boolean>(false);
   readonly timelineMonthTruncated = signal<boolean>(false);
   readonly historialAnual = signal<HistorialAnualResponse | null>(null);
-  readonly loadingHistorial = signal<boolean>(false);
   readonly downloadingAreaCsv = signal<boolean>(false);
   readonly areaLabel = computed(() => this.mapbox.areaScope()?.name || this.mapbox.areaName() || 'Global');
   readonly usingDefaultFilters = computed(
@@ -132,15 +135,16 @@ export class HomePage implements OnDestroy {
   private livePollTimer: ReturnType<typeof setInterval> | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
   private alertAutoClearTimer: ReturnType<typeof setTimeout> | null = null;
+  private timelineLoadTimer: ReturnType<typeof setTimeout> | null = null;
   private liveSub: Subscription | null = null;
   private resumenSub: Subscription | null = null;
   private resumenBgSub: Subscription | null = null;
   private monthSub: Subscription | null = null;
   private daySub: Subscription | null = null;
-  private histSub: Subscription | null = null;
   private areaCsvSub: Subscription | null = null;
-  private lastScopeKey = '||';
+  private lastScopeKey = '';
   private loadedMonthKey = '';
+  private readonly loadedCompleteYearKeys = new Set<string>();
   private mapContainerEl: HTMLElement | null = null;
 
   readonly activeCollection = computed<HotspotFeatureCollection>(() => {
@@ -195,21 +199,25 @@ export class HomePage implements OnDestroy {
 
     effect(() => {
       const scope = this.mapbox.areaScope();
-      const key = `${scope?.name || ''}|${scope?.pais || ''}|${scope?.bbox?.join(',') || ''}`;
+      const key = this.buildScopeKey(scope);
       if (key === this.lastScopeKey) return;
       this.lastScopeKey = key;
+      this.historialAnual.set(this.api.getCachedAnnualHistory(scope));
       if (this.timelineOpen()) {
-        this.loadAnnualHistory(true);
         this.loadTimelineData(this.timelineYear(), this.timelineMonth(), this.timelineDay());
         if (this.timelineDay() > 0) {
           this.onSelectTimelineDay(this.timelineDay());
         }
-      } else {
-        this.historialAnual.set(null);
       }
     });
 
     this.initAmbientMusic();
+  }
+
+  private buildScopeKey(scope: AreaFilterScope | null): string {
+    if (!scope) return '';
+    if (scope.isCountry && scope.pais) return `C:${scope.pais}`;
+    return `${scope.name || ''}|${scope.pais || ''}|${scope.bbox?.join(',') || ''}`;
   }
 
   ngOnDestroy(): void {
@@ -219,8 +227,8 @@ export class HomePage implements OnDestroy {
     this.resumenBgSub?.unsubscribe();
     this.monthSub?.unsubscribe();
     this.daySub?.unsubscribe();
-    this.histSub?.unsubscribe();
     this.areaCsvSub?.unsubscribe();
+    if (this.timelineLoadTimer) clearTimeout(this.timelineLoadTimer);
     if (this.toastTimer) clearTimeout(this.toastTimer);
     if (this.alertAutoClearTimer) clearTimeout(this.alertAutoClearTimer);
     this.cleanupAmbientMusic();
@@ -462,7 +470,7 @@ export class HomePage implements OnDestroy {
     this.timelineOpen.set(true);
     this.dayCollection.set(null);
     this.loadingDayHotspots.set(false);
-    this.loadAnnualHistory();
+    this.historialAnual.set(this.api.getCachedAnnualHistory(this.mapbox.areaScope()));
     this.loadTimelineData(this.timelineYear(), this.timelineMonth(), this.timelineDay());
     if (this.timelineDay() > 0) {
       this.onSelectTimelineDay(this.timelineDay());
@@ -471,6 +479,10 @@ export class HomePage implements OnDestroy {
 
   onExitTimeline(): void {
     if (!this.timelineOpen()) return;
+    if (this.timelineLoadTimer) {
+      clearTimeout(this.timelineLoadTimer);
+      this.timelineLoadTimer = null;
+    }
     this.mapbox.clearPeakMarker();
     this.resumenSub?.unsubscribe();
     this.resumenBgSub?.unsubscribe();
@@ -499,7 +511,7 @@ export class HomePage implements OnDestroy {
     this.daySub?.unsubscribe();
     this.dayCollection.set(null);
     this.loadingDayHotspots.set(false);
-    this.loadTimelineData(year, nextMonth, 0);
+    this.scheduleTimelineLoad(year, nextMonth, 0);
   }
 
   onSelectTimelineMonth(month: number): void {
@@ -509,7 +521,24 @@ export class HomePage implements OnDestroy {
     this.daySub?.unsubscribe();
     this.dayCollection.set(null);
     this.loadingDayHotspots.set(false);
-    this.loadTimelineData(this.timelineYear(), month, 0);
+    this.scheduleTimelineLoad(this.timelineYear(), month, 0);
+  }
+
+  private scheduleTimelineLoad(year: number, month: number, day: number): void {
+    this.applyTimelineDayRange(year, month, day);
+    this.resumenSub?.unsubscribe();
+    this.resumenBgSub?.unsubscribe();
+    this.monthSub?.unsubscribe();
+    if (this.timelineLoadTimer) {
+      clearTimeout(this.timelineLoadTimer);
+    }
+    this.loadingResumen.set(true);
+    this.loadingMonthHotspots.set(true);
+    this.timelineLoadTimer = setTimeout(() => {
+      this.timelineLoadTimer = null;
+      if (!this.timelineOpen()) return;
+      this.loadTimelineData(this.timelineYear(), this.timelineMonth(), this.timelineDay());
+    }, 220);
   }
 
   onSelectTimelineDay(day: number): void {
@@ -601,6 +630,10 @@ export class HomePage implements OnDestroy {
   }
 
   private loadTimelineData(year: number, month: number, day: number): void {
+    if (this.timelineLoadTimer) {
+      clearTimeout(this.timelineLoadTimer);
+      this.timelineLoadTimer = null;
+    }
     this.applyTimelineDayRange(year, month, day);
 
     this.resumenSub?.unsubscribe();
@@ -608,7 +641,8 @@ export class HomePage implements OnDestroy {
     this.monthSub?.unsubscribe();
 
     const scope = this.mapbox.areaScope();
-    const scopeKey = `${scope?.name || ''}|${scope?.pais || ''}|${scope?.bbox?.join(',') || ''}`;
+    const scopeKey = this.buildScopeKey(scope);
+    const yearScopeKey = `${year}:${scopeKey}`;
     const monthKey = `${year}-${month}:${scopeKey}`;
     this.loadedMonthKey = '';
     this.timelineMonthTruncated.set(false);
@@ -638,13 +672,23 @@ export class HomePage implements OnDestroy {
     this.resumenSub = this.api.fetchResumen(year, month, scope, 'rapido').subscribe({
       next: (res) => {
         if (this.timelineYear() !== year || this.timelineMonth() !== month) return;
+        const cachedBars = this.api.getCachedYearSummary(year, scope);
+        const alreadyScannedYear = this.loadedCompleteYearKeys.has(yearScopeKey);
+        if (res.parcial && cachedBars?.length === 12 && alreadyScannedYear) {
+          this.resumen.set({ ...res, parcial: false, resumenMensual: cachedBars });
+          this.loadingResumen.set(false);
+          return;
+        }
         this.resumen.set(res);
         this.loadingResumen.set(false);
 
-        if (res.parcial) {
+        if (!res.parcial) {
+          this.loadedCompleteYearKeys.add(yearScopeKey);
+        } else {
           this.resumenBgSub?.unsubscribe();
           this.resumenBgSub = this.api.fetchResumen(year, month, scope, 'completo').subscribe({
             next: (fullRes) => {
+              this.loadedCompleteYearKeys.add(yearScopeKey);
               if (this.timelineOpen() && this.timelineYear() === year && this.timelineMonth() === month) {
                 this.resumen.set(fullRes);
               }
@@ -800,41 +844,31 @@ export class HomePage implements OnDestroy {
     this.updateDayRange(this.todayDay - 6, this.todayDay);
   }
 
-  onEnsureAnnualHistory(): void {
-    if (!this.historialAnual() && !this.loadingHistorial()) {
-      this.loadAnnualHistory();
-    }
-  }
-
-  loadAnnualHistory(force = false): void {
-    if (force) {
-      this.historialAnual.set(null);
-    }
-    const scope = this.mapbox.areaScope();
-    const reqScopeKey = `${scope?.name || ''}|${scope?.pais || ''}|${scope?.bbox?.join(',') || ''}`;
-    this.histSub?.unsubscribe();
-    this.loadingHistorial.set(true);
-    this.histSub = this.api.fetchAnnualHistory(scope).subscribe({
-      next: (res) => {
-        const curScope = this.mapbox.areaScope();
-        const curKey = `${curScope?.name || ''}|${curScope?.pais || ''}|${curScope?.bbox?.join(',') || ''}`;
-        if (curKey !== reqScopeKey) return;
-        this.historialAnual.set(res);
-        this.loadingHistorial.set(false);
-      },
-      error: () => {
-        this.loadingHistorial.set(false);
-      }
-    });
+  onOpenHistoryDialog(): void {
+    this.historyDlg?.openModal(this.mapbox.areaScope());
   }
 
   onOpenAreaHistory(): void {
+    this.historyDlg?.openModal(this.mapbox.areaScope());
+  }
+
+  onApplyHistoryToMap(ev: ApplyPeriodEvent): void {
+    const scope = ev.scope;
+    const nextKey = this.buildScopeKey(scope);
+    this.timelineYear.set(ev.year);
+    this.timelineMonth.set(ev.month);
+    this.timelineDay.set(0);
+    this.daySub?.unsubscribe();
+    this.dayCollection.set(null);
+    this.loadingDayHotspots.set(false);
+    this.lastScopeKey = nextKey;
+    this.mapbox.applyExternalScope(scope);
+    this.historialAnual.set(this.api.getCachedAnnualHistory(scope));
     if (!this.timelineOpen()) {
       this.onToggleTimeline();
     } else {
-      this.loadAnnualHistory(!this.historialAnual());
+      this.loadTimelineData(ev.year, ev.month, 0);
     }
-    setTimeout(() => this.timelineCal?.openHistoryDialog(), 30);
   }
 
   onDownloadSearchCsv(): void {

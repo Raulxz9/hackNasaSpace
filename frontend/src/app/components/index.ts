@@ -3,6 +3,7 @@ export * from './map-globe/map-globe.component';
 export * from './filters-panel/filters-panel.component';
 export * from './map-settings-panel/map-settings-panel.component';
 export * from './timeline-calendar/timeline-calendar.component';
+export * from './fire-history-dialog/fire-history-dialog.component';
 export * from './risk-prediction-panel/risk-prediction-panel.component';
 export * from './hotspot-toast/hotspot-toast.component';
 export * from './footer-bar/footer-bar.component';

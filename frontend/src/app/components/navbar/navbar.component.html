@@ -111,6 +111,15 @@
 
     <button
       class="btn"
+      id="btnHist"
+      [title]="i18n.translate('Historial de incendios (2000–presente)')"
+      (click)="openHistory.emit()"
+    >
+      <span>📊</span><span class="tx">{{ i18n.translate('Historial') }}</span>
+    </button>
+
+    <button
+      class="btn"
       id="btnPred"
       [attr.aria-pressed]="predictionOpen()"
       [title]="i18n.translate('Probabilidades de incendio (experimental)')"

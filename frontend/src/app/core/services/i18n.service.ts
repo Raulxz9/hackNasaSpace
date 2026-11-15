@@ -115,6 +115,8 @@ const EN_DICT: Record<string, string> = {
   'Descargar': 'Download',
   'Descargar CSV de esta búsqueda': 'Download search CSV',
   '📊 Historial 2000–hoy': '📊 2000–present history',
+  '📊 Historial': '📊 History',
+  'Historial': 'History',
   'Historial de incendios (2000–presente)': 'Fire activity history (2000–present)',
   'Rampa de actividad': 'Activity color ramp',
   'Menos': 'Lower',
@@ -130,7 +132,8 @@ const EN_DICT: Record<string, string> = {
   'Promedio anual': 'Annual average',
   'Mediana anual': 'Annual median',
   'Descargar CSV de búsqueda': 'Download search CSV',
-  'Vs anteriores / base': 'Vs prior / baseline'
+  'Vs anteriores / base': 'Vs prior / baseline',
+  'Historial 2000+': 'History 2000+'
 };
 
 @Injectable({ providedIn: 'root' })
