@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const express = require('express');
+const cors = require('cors');
 const { Storage } = require('@google-cloud/storage');
 const csv = require('csv-parser');
 const axios = require('axios');
@@ -9,7 +10,27 @@ const { Readable } = require('stream');
 const app = express();
 const port = process.env.PORT || 3000;
 
-const storage = new Storage();
+// Habilita CORS para que el frontend pueda hacer peticiones desde cualquier origen
+app.use(cors());
+app.use(express.json());
+
+// Configuración de Google Cloud Storage (soporta nube via JSON en env y local via archivo)
+let storage;
+if (process.env.GCP_CREDENTIALS_JSON) {
+    try {
+        const credentials = JSON.parse(process.env.GCP_CREDENTIALS_JSON);
+        storage = new Storage({
+            projectId: credentials.project_id,
+            credentials
+        });
+    } catch (err) {
+        console.error('Error al parsear GCP_CREDENTIALS_JSON:', err.message);
+        process.exit(1);
+    }
+} else {
+    storage = new Storage();
+}
+
 const BUCKET_NAME = (process.env.BUCKET_NAME || 'incendios-datos-bucket-2026').trim();
 const NASA_MAP_KEY = (process.env.NASA_MAP_KEY || '').trim();
 const FUENTE_NASA = 'VIIRS_NOAA20_NRT';
@@ -57,8 +78,6 @@ const normalizar = (s) => String(s || '').trim().toLowerCase().replace(/[_\s]+/g
 const ESQUEMA = ['latitude', 'longitude', 'scan', 'confidence', 'daynight',
     'datetime', 'frp', 'sensor', 'frp_log', 'scan_norm', 'frp_log_norm'];
 
-// Fecha (YYYY-MM-DD) y hora (HHMM) de una fila, sea de tu esquema (datetime)
-// o cruda de la NASA (acq_date / acq_time)
 const fechaDe = (r) => String(r.datetime || r.acq_date || '').slice(0, 10);
 const horaDe = (r) => {
     if (r.datetime) return String(r.datetime).slice(11, 16).replace(':', '');
@@ -80,9 +99,9 @@ const nasaAEsquema = (r) => {
         datetime: `${r.acq_date} ${hhmm.slice(0, 2)}:${hhmm.slice(2, 4)}:00`,
         frp: r.frp,
         sensor: 'VIIRS',
-        frp_log: Number.isFinite(frp) ? Math.log1p(frp) : '', // coincide con tus datos: ln(1+frp)
-        scan_norm: '',      // requiere el min/max de tu ETL
-        frp_log_norm: ''    // requiere el min/max de tu ETL
+        frp_log: Number.isFinite(frp) ? Math.log1p(frp) : '',
+        scan_norm: '',
+        frp_log_norm: ''
     };
 };
 
@@ -91,7 +110,6 @@ const escaparCsv = (valor) => {
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
-// Genera el CSV con las columnas de tu esquema
 const generarCsv = (registros) => {
     const filas = registros.map(r => ESQUEMA.map(c => escaparCsv(r[c])).join(','));
     return [ESQUEMA.join(','), ...filas].join('\n');
@@ -115,7 +133,6 @@ const leerCsvGcs = (file, onRow) => new Promise((resolve, reject) => {
         .on('error', reject);
 });
 
-// Ejecuta fn sobre cada elemento con un máximo de tareas en paralelo
 async function conLimite(items, limite, fn) {
     let i = 0;
     const trabajadores = Array.from({ length: Math.min(limite, items.length) }, async () => {
@@ -131,7 +148,6 @@ async function conLimite(items, limite, fn) {
     await Promise.all(trabajadores);
 }
 
-// Filtro común (fecha exacta y rango de horas)
 const construirPredicado = ({ fecha, horaInicio, horaFin }) => {
     const hInicio = horaInicio ? horaInicio.replace(':', '').padStart(4, '0') : null;
     const hFin = horaFin ? horaFin.replace(':', '').padStart(4, '0') : null;
@@ -145,7 +161,6 @@ const construirPredicado = ({ fecha, horaInicio, horaFin }) => {
     };
 };
 
-// Acumula filas que cumplen el filtro; guarda hasta "limite" pero cuenta todas
 const crearColector = (predicado, limite) => {
     const data = [];
     let total = 0;
@@ -161,7 +176,7 @@ const crearColector = (predicado, limite) => {
 };
 
 // ---------------------------------------------------------------
-// GCS: archivos del mes (uno por país: 2000_11_Afghanistan.csv)
+// GCS: archivos del mes
 // ---------------------------------------------------------------
 async function listarArchivosMes(anio, mes) {
     const prefijo = `${anio}_${mes}_`;
@@ -173,7 +188,7 @@ async function listarArchivosMes(anio, mes) {
             nombre: f.name,
             pais: f.name.slice(prefijo.length, -4).replace(/_/g, ' ')
         }))
-        .filter(a => normalizar(a.pais) !== 'world'); // se arma al vuelo, no se lee
+        .filter(a => normalizar(a.pais) !== 'world');
     log('INFO', `GCS: ${archivos.length} archivos de país con prefijo "${prefijo}"`);
     return archivos;
 }
@@ -189,7 +204,6 @@ async function pedirCsvNasa(url) {
     const texto = response.data;
     log('INFO', `NASA respondió HTTP ${response.status}, ${String(texto).length} caracteres`);
 
-    // La NASA responde 200 con texto de error si la key es inválida o se excede el límite
     if (typeof texto !== 'string' || !texto.startsWith('latitude')) {
         log('ERROR', 'Respuesta inesperada de la NASA:', String(texto).slice(0, 300));
         return null;
@@ -197,7 +211,6 @@ async function pedirCsvNasa(url) {
     return parsearCsvTexto(texto);
 }
 
-// Lista de países de FIRMS (nombre <-> código ISO3), con caché en memoria
 let cachePaises = null;
 async function cargarPaisesFirms() {
     if (cachePaises) return cachePaises;
@@ -227,12 +240,11 @@ async function cargarPaisesFirms() {
     } catch (e) {
         logError('cargarPaisesFirms', e);
         log('WARN', 'No se pudo cargar la lista de países; solo funcionarán códigos ISO3 (ej. MEX).');
-        return { porNombre, porCodigo }; // sin caché para reintentar después
+        return { porNombre, porCodigo };
     }
     return cachePaises;
 }
 
-// "Mexico" o "MEX" -> { codigo, nombre }
 async function resolverPais(entrada) {
     const { porNombre, porCodigo } = await cargarPaisesFirms();
     const limpio = entrada.trim();
@@ -245,7 +257,6 @@ async function resolverPais(entrada) {
     return { codigo: info ? info.codigo : null, nombre: info ? info.nombre : limpio };
 }
 
-// Sincroniza el CSV de UN país con los datos recientes de la NASA y lo guarda en GCS
 async function sincronizarPais(fechaHoy, pais, archivos) {
     const [anio, mes] = fechaHoy.split('-');
     try {
@@ -269,7 +280,6 @@ async function sincronizarPais(fechaHoy, pais, archivos) {
             .map(nasaAEsquema);
         log('INFO', `NASA (${codigo}): ${filasNasa.length} filas, ${registrosNasa.length} pertenecen a ${prefijoMes}`);
 
-        // Archivo existente (si lo hay) o nombre nuevo con el mismo formato que los demás
         const existente = archivos.find(a =>
             normalizar(a.pais) === normalizar(nombre) || normalizar(a.pais) === normalizar(pais));
         const file = existente
@@ -298,8 +308,6 @@ async function sincronizarPais(fechaHoy, pais, archivos) {
     }
 }
 
-// Datos de HOY de todo el mundo (en memoria, con caché de 5 min). No se guardan
-// en GCS porque la NASA no indica el país en el CSV mundial.
 let cacheMundoHoy = { fecha: null, ts: 0, filas: [] };
 async function obtenerMundoHoy(fechaHoy) {
     if (!NASA_MAP_KEY) return [];
@@ -322,8 +330,16 @@ async function obtenerMundoHoy(fechaHoy) {
 }
 
 // ---------------------------------------------------------------
-// ENDPOINT
+// ENDPOINTS
 // ---------------------------------------------------------------
+app.get('/', (req, res) => {
+    res.json({
+        status: 'ok',
+        servicio: 'API de Incendios NASA FIRMS + GCS',
+        endpoint: '/api/incendios'
+    });
+});
+
 app.get('/api/incendios', async (req, res) => {
     try {
         log('INFO', 'Parámetros recibidos:', JSON.stringify(req.query));
@@ -356,7 +372,6 @@ app.get('/api/incendios', async (req, res) => {
         let paisesLeidos = 0;
 
         if (pais) {
-            // ---------- Un solo país ----------
             let registros = null;
 
             if (requiereDatosFrescos) {
@@ -381,12 +396,11 @@ app.get('/api/incendios', async (req, res) => {
                 paisesLeidos = 1;
             }
         } else {
-            // ---------- Mundo: se arma uniendo todos los países ----------
             if (archivos.length === 0 && !requiereDatosFrescos) {
                 return res.status(404).json({ error: `No hay archivos de países para ${anio}-${mes} en el bucket.` });
             }
 
-            const clavesHoy = new Set(); // para no duplicar con los datos en vivo de la NASA
+            const clavesHoy = new Set();
             await conLimite(archivos, CONCURRENCIA_GCS, async (a) => {
                 await leerCsvGcs(a.file, (row) => {
                     if (requiereDatosFrescos && fechaDe(row) === fechaHoy) clavesHoy.add(claveRegistro(row));
@@ -430,11 +444,16 @@ app.get('/api/incendios', async (req, res) => {
 process.on('unhandledRejection', (reason) => log('ERROR', 'unhandledRejection:', reason));
 process.on('uncaughtException', (err) => logError('uncaughtException', err));
 
-const server = app.listen(port, () => {
-    log('INFO', `API inteligente corriendo en http://localhost:${port}`);
-});
+// Arranca servidor tradicional (Render / Local) y exporta app para serverless (Vercel)
+if (process.env.VERCEL !== '1') {
+    const server = app.listen(port, () => {
+        log('INFO', `API inteligente corriendo en puerto ${port}`);
+    });
 
-server.on('error', (err) => {
-    logError('server', err); // ej. EADDRINUSE si el puerto está ocupado
-    process.exit(1);
-});
+    server.on('error', (err) => {
+        logError('server', err);
+        process.exit(1);
+    });
+}
+
+module.exports = app;
