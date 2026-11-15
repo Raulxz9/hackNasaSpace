@@ -1,0 +1,99 @@
+<footer class="foot glass">
+  <span class="cp">{{ i18n.translate('© 2026 IRIS · Datos armonizados MODIS + VIIRS · NASA FIRMS') }}</span>
+
+  @if (api.serverStatus() === 'connecting') {
+    <span class="foot-status">
+      <i class="foot-dot"></i>
+      {{ i18n.l('Sincronizando con NASA FIRMS…', 'Syncing with NASA FIRMS…') }}
+    </span>
+  } @else if (api.serverStatus() === 'waking') {
+    <span class="foot-status waking">
+      <i class="foot-dot"></i>
+      {{ i18n.l('Conectando con satélite / despertando servidor…', 'Connecting to satellite / waking server…') }}
+    </span>
+  } @else if (api.serverStatus() === 'error') {
+    <span class="foot-status error" [title]="api.lastError() || ''">
+      {{ i18n.l('Servidor sin respuesta (reintentando)', 'Server unreachable (retrying)') }}
+    </span>
+  }
+
+  <span class="pos">
+    <span>{{ i18n.translate('Coordenadas') }}</span>
+    <b id="coords">{{ mapbox.cursorCoords() }}</b>
+  </span>
+
+  <button #btnTerms class="lnk" id="btnTerms" (click)="openTerms()">{{ i18n.translate('Términos y condiciones') }}</button>
+  <span class="cred">{{ i18n.translate('Mapas © Mapbox · © OpenStreetMap · NASA FIRMS') }}</span>
+</footer>
+
+<section
+  #legalSec
+  class="legal"
+  id="legal"
+  [hidden]="!legalOpen()"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="legalT"
+>
+  <div class="legal-in glass">
+    <h2 id="legalT">{{ i18n.translate('Términos y condiciones') }}</h2>
+    <div class="terms">
+      <h3>{{ i18n.l('1. Uso informativo', '1. Informational use') }}</h3>
+      <p>
+        {{ i18n.l(
+          'IRIS muestra focos de calor con fines informativos. No sustituye a protección civil, bomberos ni a ninguna autoridad. En una emergencia llama al número oficial de tu país (en México, 911).',
+          'IRIS shows heat hotspots for informational purposes only. It does not replace civil protection, firefighters or any authority. In an emergency, call your country’s official number (in Mexico, 911).'
+        ) }}
+      </p>
+      <h3>{{ i18n.l('2. Datos reales MODIS + VIIRS', '2. Real MODIS + VIIRS data') }}</h3>
+      <p>
+        {{ i18n.l(
+          'IRIS utiliza registros satelitales históricos armonizados MODIS y VIIRS almacenados en Google Cloud Storage (desde noviembre de 2000) y detecciones en tiempo casi real (NRT) de NASA FIRMS VIIRS_NOAA20_NRT.',
+          'IRIS uses harmonized historical MODIS and VIIRS satellite records stored in Google Cloud Storage (since November 2000) and near-real-time (NRT) detections from NASA FIRMS VIIRS_NOAA20_NRT.'
+        ) }}
+      </p>
+      <h3>{{ i18n.l('3. Precisión', '3. Accuracy') }}</h3>
+      <p>
+        {{ i18n.l(
+          'Los datos satelitales pueden tener retraso, errores de ubicación o falsos positivos (por ejemplo fábricas, volcanes o plataformas petroleras). No tomes decisiones de seguridad basándote solo en IRIS.',
+          'Satellite data may be delayed, mislocated or contain false positives (for example factories, volcanoes or offshore platforms). Do not make safety decisions based on IRIS alone.'
+        ) }}
+      </p>
+      <h3>{{ i18n.l('4. Predicción experimental', '4. Experimental prediction') }}</h3>
+      <p>
+        {{ i18n.l(
+          'La predicción de riesgo es una función experimental que combina variables meteorológicas con focos cercanos activos. Su resultado es una estimación y puede ser incorrecto.',
+          'The risk prediction is an experimental feature combining meteorological variables with nearby active hotspots. Its result is an estimate and may be wrong.'
+        ) }}
+      </p>
+      <h3>{{ i18n.l('5. Privacidad', '5. Privacy') }}</h3>
+      <p>
+        {{ i18n.l(
+          'El token de Mapbox y tus preferencias visuales se guardan solo en tu navegador. Las búsquedas de lugares se envían a Mapbox y a OpenStreetMap para obtener resultados.',
+          'The Mapbox token and your display preferences are stored only in your browser. Place searches are sent to Mapbox and OpenStreetMap to get results.'
+        ) }}
+      </p>
+      <h3>{{ i18n.l('6. Responsabilidad', '6. Liability') }}</h3>
+      <p>
+        {{ i18n.l(
+          'El servicio se ofrece «tal cual», sin garantías. Los autores no se hacen responsables por daños derivados de su uso.',
+          'The service is provided “as is”, without warranties. The authors are not liable for damages arising from its use.'
+        ) }}
+      </p>
+      <h3>{{ i18n.l('7. Cambios', '7. Changes') }}</h3>
+      <p>
+        {{ i18n.l(
+          'Estos términos pueden actualizarse. Seguir usando IRIS implica aceptar la versión vigente.',
+          'These terms may be updated. Continuing to use IRIS means accepting the current version.'
+        ) }}
+      </p>
+    </div>
+    <div class="legal-f">
+      <span class="cred">
+        <span>© 2026 IRIS</span> ·
+        <span>{{ i18n.translate('Mapas © Mapbox · © OpenStreetMap · NASA FIRMS') }}</span>
+      </span>
+      <button #btnTop class="btn" id="btnTop" (click)="closeTerms()">{{ i18n.translate('✕ Cerrar sección') }}</button>
+    </div>
+  </div>
+</section>

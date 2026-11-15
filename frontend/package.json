@@ -1,0 +1,36 @@
+{
+  "name": "iris-frontend",
+  "version": "1.0.0",
+  "description": "IRIS (Infrared Remote Incident System) - Angular + Ionic PWA",
+  "private": true,
+  "scripts": {
+    "ng": "ng",
+    "start": "ng serve",
+    "build": "ng build --configuration production",
+    "watch": "ng build --watch --configuration development",
+    "test": "ng test"
+  },
+  "dependencies": {
+    "@angular/common": "^22.2.6",
+    "@angular/compiler": "^22.2.6",
+    "@angular/core": "^22.2.6",
+    "@angular/forms": "^22.2.6",
+    "@angular/platform-browser": "^22.2.6",
+    "@angular/pwa": "^22.2.7",
+    "@angular/router": "^22.2.6",
+    "@angular/service-worker": "^22.2.6",
+    "@ionic/angular": "^9.0.11",
+    "mapbox-gl": "^3.35.0",
+    "rxjs": "^7.8.2",
+    "tslib": "^2.8.1",
+    "xlsx": "^0.18.5",
+    "zone.js": "^0.15.0"
+  },
+  "devDependencies": {
+    "@angular/build": "^22.2.7",
+    "@angular/cli": "^22.2.7",
+    "@angular/compiler-cli": "^22.2.6",
+    "@types/geojson": "^7946.0.16",
+    "typescript": "~6.0.2"
+  }
+}

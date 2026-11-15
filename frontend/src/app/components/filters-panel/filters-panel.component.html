@@ -1,0 +1,30 @@
+<button
+  class="fab glass"
+  id="btnFilters"
+  [attr.aria-expanded]="open()"
+  [attr.aria-label]="i18n.translate('Filtros')"
+  [title]="i18n.translate('Filtros')"
+  (click)="toggleOpen.emit()"
+>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 5h18l-7 8v6l-4-2v-4z" />
+  </svg>
+</button>
+
+<section class="panel glass" id="filters" [hidden]="!open()" [attr.aria-label]="i18n.translate('Filtros')">
+  <h2>{{ i18n.l('Intensidad del incendio', 'Fire intensity') }}</h2>
+  @for (s of severities; track s) {
+    <label class="chk">
+      <input type="checkbox" [checked]="selectedSevs().has(s)" (change)="onSevChange(s, $event)" />
+      <i [style.--c]="sevColors[s]"></i>{{ i18n.sevNames()[s] }}
+    </label>
+  }
+
+  <h2>{{ i18n.l('Origen del calor', 'Heat source') }}</h2>
+  @for (src of sources; track src) {
+    <label class="chk">
+      <input type="checkbox" [checked]="selectedSources().has(src)" (change)="onSrcChange(src, $event)" />
+      {{ i18n.srcLabels()[src] }}
+    </label>
+  }
+</section>

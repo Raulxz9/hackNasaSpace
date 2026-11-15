@@ -1,0 +1,31 @@
+<div id="alerts" aria-live="polite" [style.top.px]="topOffsetPx()">
+  @if (showAlerts()) {
+    @for (al of alerts(); track al.id) {
+      <button class="al" [style.--c]="sevColors[al.sev]" (click)="onAlertClick(al, $event)">
+        <i></i>
+        <span>
+          <b>
+            {{ i18n.l('Nuevo foco ' + i18n.sevNames()[al.sev].toLowerCase(), 'New ' + i18n.sevNames()[al.sev].toLowerCase() + ' hotspot') }}
+            · {{ al.frp }} MW
+          </b>
+          <small>
+            {{ al.country }} ({{ al.coordinates[1].toFixed(2) }}, {{ al.coordinates[0].toFixed(2) }}) · {{ i18n.l('toca para verlo', 'tap to view') }}
+          </small>
+        </span>
+        <span class="x" [attr.aria-label]="i18n.translate('Cerrar')">✕</span>
+      </button>
+    }
+  }
+</div>
+
+<div
+  id="toast"
+  role="status"
+  aria-live="polite"
+  [class.show]="!!toast()"
+  [class.error]="toast()?.isError"
+  [class.link]="!!toast()?.flyTo"
+  (click)="onToastClick()"
+>
+  {{ toast()?.message }}
+</div>

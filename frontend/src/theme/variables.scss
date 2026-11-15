@@ -1,0 +1,45 @@
+/* ==========================================================
+   IRIS Theme Tokens & Ionic Overrides
+   ========================================================== */
+:root {
+  --bg: #0B1220;
+  --surface: #141C2E;
+  --surface-2: #1D2740;
+  --border: #2B3652;
+  --text: #E8EDF7;
+  --text-muted: #94A0BA;
+
+  --primary: #22D3EE;
+  --primary-hover: #0EA5C4;
+  --accent: #FFB020;
+
+  --sev-1: #FACC15;
+  --sev-2: #FB923C;
+  --sev-3: #EF4444;
+  --sev-4: #B91C1C;
+  --sev-5: #7F1D1D;
+  --sev-5-halo: #FF3B30;
+
+  --success: #34D399;
+  --warning: #FBBF24;
+  --error: #F87171;
+  --info: #60A5FA;
+  --layer-prediction: #A78BFA;
+
+  --glass: rgba(20, 28, 46, .80);
+  --lg-tint: rgba(16, 24, 42, .34);
+  --lg-blur: 22px;
+  --lg-hi: rgba(255, 255, 255, .34);
+  --lg-edge: rgba(255, 255, 255, .16);
+  --font-ui: 'Public Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Sora', 'Public Sans', system-ui, sans-serif;
+  --gap: 12px;
+  --hh: calc(env(safe-area-inset-top, 0px) + 80px);
+
+  /* Ionic Framework dark theme mapping */
+  --ion-background-color: #0B1220;
+  --ion-text-color: #E8EDF7;
+  --ion-color-primary: #22D3EE;
+  --ion-color-primary-contrast: #0B1220;
+  --ion-font-family: var(--font-ui);
+}

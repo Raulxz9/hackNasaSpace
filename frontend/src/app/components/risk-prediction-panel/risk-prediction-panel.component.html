@@ -1,0 +1,56 @@
+<section class="panel glass pr" id="pred" [hidden]="!open()" [attr.aria-label]="i18n.translate('Predicción experimental')">
+  <h2>{{ i18n.translate('🔮 Predicción de riesgo') }} <em class="beta">Experimental</em></h2>
+  <p class="hint">
+    {{ i18n.translate('Calcula el riesgo de incendio en la zona del centro del mapa. Combina variables meteorológicas locales con focos activos cercanos de NASA FIRMS.') }}
+  </p>
+
+  <div id="prF">
+    @for (p of paramsDef; track p.key) {
+      <div class="row">
+        <label [for]="'p' + p.key">{{ i18n.translate(p.label) }}</label>
+        <input
+          [id]="'p' + p.key"
+          type="range"
+          [min]="p.min"
+          [max]="p.max"
+          [value]="displayParamValue(p.key)"
+          (input)="onParamChange(p.key, $event)"
+        />
+        <output [id]="'o' + p.key">{{ displayParamValue(p.key) }}{{ i18n.unit(p.unit) }}</output>
+      </div>
+    }
+  </div>
+
+  <div class="inline">
+    <button class="btn primary" id="prGo" (click)="calculateHere()">{{ i18n.translate('Calcular aquí') }}</button>
+    <button class="btn" id="prOff" (click)="clearPrediction()">{{ i18n.translate('Quitar del mapa') }}</button>
+  </div>
+
+  <div id="prOut">
+    @if (result(); as res) {
+      <div class="pr-s" [style.--c]="sevColors[resultLevel()]">
+        <b>{{ res.score }}</b>
+        <span>
+          {{ i18n.l('de 100 · riesgo ' + i18n.sevNames()[resultLevel()].toLowerCase(), 'of 100 · ' + i18n.sevNames()[resultLevel()].toLowerCase() + ' risk') }}
+        </span>
+      </div>
+      @for (term of res.terms; track term.label) {
+        <div class="pr-t">
+          <span>{{ i18n.translate(term.label) }}</span>
+          <u><i [class.neg]="term.value < 0" [style.width.%]="(abs(term.value) / maxTermAbs()) * 100"></i></u>
+        </div>
+      }
+      <p class="hint">
+        {{ i18n.l('Naranja = sube el riesgo · azul = lo baja. Focos cercanos activos', 'Orange = raises risk · blue = lowers it. Nearby active hotspots') }}: {{ nearbyCount() }}.
+      </p>
+    }
+  </div>
+
+  <details>
+    <summary>{{ i18n.translate('Ver la ecuación') }}</summary>
+    <pre>z = −0.4 + 0.09·(T−28) + 0.04·(35−H) + 0.04·(V−15)
+    + 0.10·(D−7) + 1.5·(S−0.5) + 0.5·ln(1+F)
+riesgo = 100 / (1 + e^−z)</pre>
+    <p class="hint">{{ i18n.translate('T temperatura · H humedad · V viento · D días sin lluvia · S vegetación seca · F focos cercanos') }}</p>
+  </details>
+</section>

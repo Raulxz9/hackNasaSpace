@@ -1,0 +1,121 @@
+<ion-content [scrollY]="false">
+  <app-map-globe
+    [projection]="settings().projection"
+    (projectionChange)="onProjectionChange($event)"
+    (containerReady)="onMapContainerReady($event)"
+  />
+
+  <app-navbar
+    [live]="live()"
+    [warnActive]="settings().warn"
+    [warnCount]="warnCount()"
+    [timelineOpen]="timelineOpen()"
+    [predictionOpen]="predictionOpen()"
+    (toggleLive)="onToggleLive()"
+    (toggleWarn)="onToggleWarn()"
+    (toggleTimeline)="onToggleTimeline()"
+    (togglePrediction)="onTogglePrediction()"
+    (dropdownBottomChange)="alertsTopPx.set($event)"
+    (notifyToast)="showToast($event)"
+  />
+
+  <app-filters-panel
+    [open]="openLeftPanel() === 'filters'"
+    [selectedSevs]="filters().severidades"
+    [selectedSources]="filters().origenes"
+    (toggleOpen)="onToggleLeftPanel('filters')"
+    (toggleSeverity)="onToggleSeverity($event)"
+    (toggleSource)="onToggleSource($event)"
+  />
+
+  <app-map-settings-panel
+    [open]="openLeftPanel() === 'settings'"
+    [settings]="settings()"
+    (toggleOpen)="onToggleLeftPanel('settings')"
+    (settingsChange)="onSettingsChange($event)"
+    (resetView)="onResetView()"
+  />
+
+  <app-timeline-calendar
+    [open]="timelineOpen()"
+    [selectedYear]="timelineYear()"
+    [selectedMonth]="timelineMonth()"
+    [selectedDay]="timelineDay()"
+    [resumen]="resumen()"
+    [loadingResumen]="loadingResumen()"
+    [loadingHotspots]="timelineDay() > 0 && !playbackActive() ? loadingDayHotspots() : loadingMonthHotspots()"
+    [monthFeatures]="timelineCollection().features"
+    [dayFeatures]="dayCollection()?.features || []"
+    [visibleFeatures]="visibleFeatures()"
+    [monthTruncated]="timelineMonthTruncated()"
+    [usingDefaultFilters]="usingDefaultFilters()"
+    (selectYear)="onSelectTimelineYear($event)"
+    (selectMonth)="onSelectTimelineMonth($event)"
+    (selectDay)="onSelectTimelineDay($event)"
+    (playStep)="onPlayTimelineDay($event)"
+    (playingChange)="onTimelinePlaybackChange($event)"
+    (goPeak)="onGoTimelinePeak()"
+    (exportCsv)="onExportCsv()"
+    (exitTimeline)="onExitTimeline()"
+    (notifyToast)="showToast($event)"
+  />
+
+  <app-risk-prediction-panel
+    [open]="predictionOpen()"
+    [activeFeatures]="visibleFeatures()"
+    (predictionLayerChange)="onPredictionLayerChange($event)"
+  />
+
+  <app-hotspot-toast
+    [alerts]="alerts()"
+    [showAlerts]="settings().alerts"
+    [toast]="toast()"
+    [topOffsetPx]="alertsTopPx()"
+    (dismissAlert)="onDismissAlert($event)"
+    (dismissToast)="toast.set(null)"
+  />
+
+  <button
+    class="fab mute glass"
+    id="btnMute"
+    [attr.aria-pressed]="musicMuted()"
+    [attr.aria-label]="musicMuted() ? i18n.translate('Activar música') : i18n.translate('Silenciar música')"
+    [title]="musicMuted() ? i18n.translate('Activar música') : i18n.translate('Silenciar música')"
+    (click)="onToggleMusic()"
+  >
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M11 5 6 9H3v6h3l5 4V5z" />
+      <path class="w" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />
+      <path class="x" d="m16 9 6 6m0-6-6 6" />
+    </svg>
+  </button>
+
+  <app-footer-bar />
+
+  <dialog #tokenDlg id="tokenDlg">
+    <h2>{{ i18n.translate('Conecta tu mapa') }}</h2>
+    <p>
+      {{ i18n.translate('IRIS usa Mapbox para dibujar el globo. Pega tu token público (empieza con') }}
+      <b>pk.</b>{{ i18n.translate(') para continuar. Se guarda solo en este navegador.') }}
+    </p>
+    <p>
+      <a href="https://account.mapbox.com/access-tokens/" target="_blank" rel="noopener">
+        {{ i18n.translate('Obtener un token en Mapbox') }}
+      </a>
+    </p>
+    <input
+      #dlgTokenInput
+      id="dToken"
+      type="text"
+      placeholder="pk.eyJ1Ijoi..."
+      [attr.aria-label]="i18n.translate('Token de Mapbox')"
+      autocomplete="off"
+      (keydown.enter)="onSaveTokenFromDialog(dlgTokenInput.value)"
+    />
+    <div class="actions">
+      <button class="btn primary" id="dTokenSave" (click)="onSaveTokenFromDialog(dlgTokenInput.value)">
+        {{ i18n.translate('Guardar y abrir el mapa') }}
+      </button>
+    </div>
+  </dialog>
+</ion-content>

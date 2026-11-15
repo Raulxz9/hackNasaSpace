@@ -1,0 +1,323 @@
+<section
+  class="tl glass"
+  id="tl"
+  [class.playing]="playing()"
+  [hidden]="!open()"
+  [attr.aria-label]="i18n.translate('Línea del tiempo')"
+  (mouseenter)="onTimelineMouseEnter()"
+  (mouseleave)="onTimelineMouseLeave()"
+>
+  <div class="tl-bar">
+    <div class="tl-ttl">
+      <b>{{ i18n.translate('🕒 Línea del tiempo') }}</b>
+      <span id="tlLbl">
+        {{ periodTitle() }} ·
+        @if (loadingResumen() || loadingHotspots()) {
+          {{ i18n.l('Cargando…', 'Loading…') }}
+        } @else {
+          {{ totalDisplayCount().toLocaleString(i18n.locale()) }} {{ i18n.l('focos', 'hotspots') }}
+        }
+      </span>
+    </div>
+
+    <div class="tl-yr">
+      <button
+        class="ic"
+        id="tlYprev"
+        data-a="yprev"
+        [disabled]="selectedYear() <= 2000"
+        [attr.aria-label]="i18n.translate('Año anterior')"
+        (click)="onStepYear(-1)"
+      >‹</button>
+      <button
+        class="yv"
+        id="tlYv"
+        data-a="ypick"
+        aria-haspopup="true"
+        [attr.aria-expanded]="yearPopOpen()"
+        [attr.aria-label]="i18n.translate('Elegir año')"
+        (click)="toggleYearPop($event)"
+      >{{ selectedYear() }}</button>
+      <button
+        class="ic"
+        id="tlYnext"
+        data-a="ynext"
+        [disabled]="selectedYear() >= currentYear"
+        [attr.aria-label]="i18n.translate('Año siguiente')"
+        (click)="onStepYear(1)"
+      >›</button>
+    </div>
+
+    <div #monthList class="tl-m" id="tlM">
+      @for (mItem of monthlyItems(); track mItem.mes; let idx = $index) {
+        <button
+          [attr.data-m]="idx"
+          [attr.aria-pressed]="mItem.mes === selectedMonth()"
+          [disabled]="isFutureMonth(mItem.mes)"
+          [style.--t]="mItem.intensityNorm.toFixed(2)"
+          (click)="onPickMonth(mItem.mes)"
+        >{{ i18n.meses()[idx].slice(0, 3) }}<i></i></button>
+      }
+    </div>
+
+    <div class="tl-ac">
+      <button
+        class="btn"
+        id="tlDt"
+        data-a="dayt"
+        [attr.aria-pressed]="drawerOpen()"
+        [title]="i18n.translate('Elegir un día (opcional)')"
+        (click)="toggleDayDrawer()"
+      >
+        <span>📅</span><span class="tx">{{ i18n.translate('Día') }}</span>
+      </button>
+
+      <button
+        class="btn glow"
+        id="tlDl"
+        [attr.data-a]="playing() ? 'play' : 'dl'"
+        [title]="playing() ? i18n.translate('⏸ Pausar') : i18n.l('Descargar el análisis de la región seleccionada', 'Download the analysis of the selected region')"
+        (click)="playing() ? togglePlay() : openDlDialog()"
+      >
+        <span>{{ playing() ? '⏸' : '⬇' }}</span>
+        <span class="tx">{{ playing() ? i18n.l('Pausar', 'Pause') : i18n.translate('Descargar') }}</span>
+      </button>
+
+      <button
+        class="btn icon"
+        id="tlMore"
+        data-a="more"
+        aria-haspopup="menu"
+        [attr.aria-expanded]="moreMenuOpen()"
+        [attr.aria-label]="i18n.translate('Más opciones')"
+        [title]="i18n.translate('Más opciones')"
+        (click)="toggleMoreMenu($event)"
+      >⋯</button>
+    </div>
+  </div>
+
+  <div class="tl-dr" id="tlDr" [hidden]="!drawerOpen()">
+    <div #dayList class="tl-d" id="tlD">
+      <button
+        class="all"
+        data-d="0"
+        [attr.aria-pressed]="selectedDay() === 0"
+        (click)="onPickDay(0)"
+      >{{ i18n.l('Mes completo', 'Whole month') }}</button>
+
+      @for (dItem of dailyItems(); track dItem.dia) {
+        <button
+          [attr.data-d]="dItem.dia"
+          [class.seen]="playing() && dItem.dia < selectedDay()"
+          [attr.aria-pressed]="selectedDay() === dItem.dia"
+          [disabled]="isFutureDay(dItem.dia)"
+          [style.--t]="dItem.intensityNorm.toFixed(2)"
+          [title]="dItem.totalFocos + ' ' + i18n.l('focos', 'hotspots')"
+          (click)="onPickDay(dItem.dia)"
+        >{{ dItem.dia }}</button>
+      }
+    </div>
+
+    <div class="tl-s" id="tlS">
+      @if (totalDisplayCount() > 0) {
+        <span><b>{{ totalDisplayCount().toLocaleString(i18n.locale()) }}</b> {{ i18n.l('focos', 'hotspots') }}</span>
+        <div class="sv">
+          @for (s of severities; track s) {
+            <i
+              [style.flex]="sevCounts()[s]"
+              [style.background]="sevColors[s]"
+              [title]="i18n.sevNames()[s] + ': ' + sevCounts()[s]"
+            ></i>
+          }
+        </div>
+        <span>
+          @if (selectedDay() === 0) {
+            {{ i18n.l('Día con más focos', 'Busiest day') }}:
+            <b>{{ busiestDayInfo().dia }}</b> ({{ busiestDayInfo().totalFocos.toLocaleString(i18n.locale()) }}) ·
+          }
+          {{ i18n.l('Intensidad máxima', 'Peak intensity') }}:
+          <b [style.color]="sevColors[peakLevel()]">{{ i18n.sevNames()[peakLevel()] }}</b>
+          @if (medianComparison(); as med) {
+            · {{ i18n.l('Vs mediana', 'Vs median') }}: {{ med.deltaPct >= 0 ? '+' : '' }}{{ med.deltaPct }}%
+          }
+        </span>
+      } @else if (loadingHotspots() || loadingResumen()) {
+        <span>{{ i18n.l('Cargando focos de calor satelitales…', 'Loading satellite hotspots…') }}</span>
+      } @else {
+        <span>{{ i18n.l('Aún no hay datos para esta fecha', 'No data for this date yet') }}</span>
+      }
+    </div>
+  </div>
+
+  <div
+    #yearList
+    class="tl-yp glass"
+    id="tlYp"
+    [hidden]="!yearPopOpen()"
+    role="dialog"
+    [attr.aria-label]="i18n.translate('Elegir año')"
+  >
+    @for (y of years; track y) {
+      <button
+        [attr.data-y]="y"
+        [attr.aria-pressed]="y === selectedYear()"
+        (click)="onPickYear(y)"
+      >{{ y }}</button>
+    }
+  </div>
+
+  <div class="tl-mn glass" id="tlMn" [hidden]="!moreMenuOpen()" role="menu">
+    <button role="menuitem" data-a="play" (click)="onMenuPlay()">
+      {{ playing() ? i18n.translate('⏸ Pausar') : i18n.translate('▶ Reproducir mes') }}
+    </button>
+    <button role="menuitem" data-a="peak" (click)="onMenuPeak()">{{ i18n.translate('🔥 Ir al foco más intenso') }}</button>
+    <button role="menuitem" data-a="list" (click)="onMenuList()">{{ i18n.translate('📋 Ver listado') }}</button>
+    <button role="menuitem" data-a="exit" (click)="onMenuExit()">{{ i18n.translate('✕ Volver a hoy') }}</button>
+  </div>
+</section>
+
+<dialog #askDlg id="askDlg">
+  <h2>{{ i18n.translate('Reproducción terminada') }}</h2>
+  <p>{{ i18n.translate('¿Te gustaría ver el listado más detallado de los incendios de este mes?') }}</p>
+  <div class="actions">
+    <button class="btn" id="askNo" (click)="closeAskDialog()">{{ i18n.translate('No, gracias') }}</button>
+    <button class="btn primary" id="askYes" (click)="openListDialog()">{{ i18n.translate('Sí, ver listado') }}</button>
+  </div>
+</dialog>
+
+<dialog #listDlg id="listDlg" (close)="onListDialogClosed()">
+  <div class="ld-h">
+    <div>
+      <h2>{{ i18n.translate('📋 Listado de incendios') }}</h2>
+      <p id="ldSub">
+        {{ i18n.meses()[selectedMonth() - 1] }} {{ selectedYear() }}
+        @if (listDayFilter() > 0) {
+          · {{ i18n.l('día ', 'day ') }}{{ listDayFilter() }}
+        }
+        · {{ listTotalCount().toLocaleString(i18n.locale()) }} {{ i18n.l('incendios', 'fires') }}
+        @if (listTotalCount() > 1500) {
+          {{ i18n.l(' (se muestran 1500; la descarga incluye todos)', ' (showing 1500; the download includes all)') }}
+        }
+      </p>
+    </div>
+    <button class="btn icon" id="ldX" [attr.aria-label]="i18n.translate('Cerrar')" (click)="closeListDialog()">✕</button>
+  </div>
+
+  <div class="ld-c">
+    <label for="ldDay">{{ i18n.translate('Día') }}</label>
+    <select id="ldDay" [value]="listDayFilter()" (change)="onListDayChange($event)">
+      <option value="0">{{ i18n.l('Todo el mes', 'Whole month') }}</option>
+      @for (dItem of dailyItems(); track dItem.dia) {
+        <option [value]="dItem.dia" [disabled]="dItem.totalFocos === 0">
+          {{ dItem.dia }} ({{ dItem.totalFocos }} {{ i18n.l('focos', 'hotspots') }})
+        </option>
+      }
+    </select>
+
+    <span class="ld-dl">
+      <button class="btn" data-f="xlsx" (click)="downloadList('xlsx')">⬇ Excel</button>
+      <button class="btn" data-f="doc" (click)="downloadList('doc')">⬇ Word</button>
+      <button class="btn" data-f="csv" (click)="downloadList('csv')">⬇ CSV</button>
+      <button class="btn" data-f="json" (click)="downloadList('json')">⬇ JSON</button>
+    </span>
+  </div>
+
+  <div class="lt">
+    <table id="ldT">
+      <thead>
+        <tr>
+          @for (col of i18n.cols(); track col) {
+            <th>{{ col }}</th>
+          }
+        </tr>
+      </thead>
+      <tbody>
+        @for (row of displayedListRows(); track $index) {
+          <tr>
+            @for (col of i18n.cols(); track col; let cIdx = $index) {
+              @if (cIdx === 5) {
+                <td><i class="dot-sev" [style.background]="sevColors[row.sev]"></i>{{ row.values[col] }}</td>
+              } @else {
+                <td>{{ row.values[col] }}</td>
+              }
+            }
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+</dialog>
+
+<dialog #dlDlg id="dlDlg" (close)="onDlDialogClosed()">
+  <h2>⬇ {{ i18n.translate('Descargar análisis de actividad') }}</h2>
+  <p>
+    {{ i18n.l(
+      'Elige desde qué fecha hasta qué fecha quieres descargar el análisis y las visualizaciones de la actividad de incendios en la región seleccionada.',
+      'Choose the start and end dates of the period you want to download: the analysis and visualizations of fire activity inside the selected region.'
+    ) }}
+  </p>
+
+  <div class="dl-reg">
+    📍
+    <div>
+      <b>{{ dlRegionName() }}</b>
+      @if (dlBox(); as box) {
+        <small>{{ box[1].toFixed(2) }}°, {{ box[0].toFixed(2) }}° → {{ box[3].toFixed(2) }}°, {{ box[2].toFixed(2) }}°</small>
+      }
+    </div>
+  </div>
+
+  <div class="dl-dates">
+    <label>
+      {{ i18n.translate('Desde') }}
+      <input
+        type="date"
+        id="dlFrom"
+        [value]="dlFrom()"
+        (input)="onDlDateChange('from', $event)"
+        min="2000-11-01"
+        [max]="todayIso"
+      />
+    </label>
+    <label>
+      {{ i18n.translate('Hasta') }}
+      <input
+        type="date"
+        id="dlTo"
+        [value]="dlTo()"
+        (input)="onDlDateChange('to', $event)"
+        min="2000-11-01"
+        [max]="todayIso"
+      />
+    </label>
+  </div>
+
+  <div class="dl-pre">
+    @for (preset of dlPresets; track preset.days) {
+      <button class="btn" [disabled]="dlBusy()" (click)="applyDlPreset(preset.days)">
+        {{ i18n.translate(preset.labelKey) }}
+      </button>
+    }
+  </div>
+
+  <p class="hint">
+    {{ i18n.l(
+      'Para cambiar de región, cierra esta ventana y haz clic en otra zona del mapa.',
+      'To change the region, close this window and click another area on the map.'
+    ) }}
+  </p>
+
+  <div class="dl-fmt">
+    <button class="btn primary" data-f="report" [disabled]="dlBusy()" (click)="runRegionDownload('report')">
+      📊 {{ i18n.translate('Reporte con gráficas (.html)') }}
+    </button>
+    <button class="btn" data-f="csv" [disabled]="dlBusy()" (click)="runRegionDownload('csv')">⬇ CSV</button>
+    <button class="btn" data-f="xlsx" [disabled]="dlBusy()" (click)="runRegionDownload('xlsx')">⬇ Excel</button>
+    <button class="btn" data-f="json" [disabled]="dlBusy()" (click)="runRegionDownload('json')">⬇ JSON</button>
+  </div>
+
+  <p id="dlMsg">{{ dlMsg() }}</p>
+  <div class="actions">
+    <button class="btn" id="dlClose" (click)="closeDlDialog()">{{ i18n.translate('Cerrar') }}</button>
+  </div>
+</dialog>

@@ -1,0 +1,62 @@
+<button
+  class="fab glass"
+  id="btnSettings"
+  [attr.aria-expanded]="open()"
+  aria-controls="settings"
+  [attr.aria-label]="i18n.translate('Ajustes')"
+  [title]="i18n.translate('Ajustes')"
+  (click)="toggleOpen.emit()"
+>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14.7 6.3a4 4 0 0 0-5.2 5.2L3.5 17.5a1.8 1.8 0 0 0 2.5 2.5l6-6a4 4 0 0 0 5.2-5.2l-2.4 2.4-2.3-.6-.6-2.3z" />
+  </svg>
+</button>
+
+<section class="panel glass" id="settings" [hidden]="!open()" [attr.aria-label]="i18n.translate('Ajustes')">
+  <h2>{{ i18n.translate('Mapa') }}</h2>
+  <div class="row"><label for="sStyle">{{ i18n.translate('Estilo base') }}</label></div>
+  <select id="sStyle" [value]="settings().style" (change)="onStyleChange($event)" autocomplete="off">
+    <option value="dark">{{ i18n.translate('Oscuro') }}</option>
+    <option value="sat">{{ i18n.translate('Satélite') }}</option>
+    <option value="terrain">{{ i18n.translate('Terreno') }}</option>
+  </select>
+
+  <div class="row">
+    <label for="sHeat">{{ i18n.translate('Manchas de calor (en vez de puntos)') }}</label>
+    <input id="sHeat" type="checkbox" [checked]="settings().heat" (change)="onBoolChange('heat', $event)" autocomplete="off" />
+  </div>
+  <div class="row">
+    <label for="sBorders">{{ i18n.translate('Resaltar fronteras y costas') }}</label>
+    <input id="sBorders" type="checkbox" [checked]="settings().borders" (change)="onBoolChange('borders', $event)" />
+  </div>
+  <div class="row">
+    <label for="sAlerts">{{ i18n.translate('Avisos de focos nuevos') }}</label>
+    <input id="sAlerts" type="checkbox" [checked]="settings().alerts" (change)="onBoolChange('alerts', $event)" />
+  </div>
+
+  <h2>{{ i18n.translate('Focos') }}</h2>
+  <div class="row">
+    <label for="rSize">{{ i18n.translate('Tamaño') }}</label>
+    <input id="rSize" type="range" min="0.5" max="3" step="0.1" [value]="settings().size" (input)="onNumberChange('size', $event)" />
+    <output id="vSize">{{ (settings().size * 100) | number:'1.0-0' }}%</output>
+  </div>
+  <div class="row">
+    <label for="rOp">{{ i18n.translate('Opacidad') }}</label>
+    <input id="rOp" type="range" min="0.1" max="1" step="0.05" [value]="settings().opacity" (input)="onNumberChange('opacity', $event)" />
+    <output id="vOp">{{ (settings().opacity * 100) | number:'1.0-0' }}%</output>
+  </div>
+
+  <h2>{{ i18n.translate('Apariencia') }}</h2>
+  <div class="row">
+    <label for="sGlass">{{ i18n.translate('Efecto liquid glass') }}</label>
+    <input id="sGlass" type="checkbox" [checked]="settings().glass" (change)="onBoolChange('glass', $event)" />
+  </div>
+
+  <h2>{{ i18n.translate('Movimiento') }}</h2>
+  <div class="row">
+    <label for="mSpin">{{ i18n.translate('Rotación automática del globo') }}</label>
+    <input id="mSpin" type="checkbox" [checked]="settings().spin" (change)="onBoolChange('spin', $event)" />
+  </div>
+
+  <button class="btn reset" id="btnReset" (click)="resetView.emit()">{{ i18n.translate('Restablecer vista') }}</button>
+</section>

@@ -1,0 +1,36 @@
+<div #mapContainer id="map" [attr.aria-label]="i18n.translate('Mapa global de focos de calor')"></div>
+
+<div class="zoom glass" role="group" aria-label="Zoom">
+  <button id="zin" [attr.aria-label]="i18n.translate('Acercar')" (click)="zoomIn()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  </button>
+  <button id="zout" [attr.aria-label]="i18n.translate('Alejar')" (click)="zoomOut()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M5 12h14" />
+    </svg>
+  </button>
+</div>
+
+<div class="viewsw glass" role="group" [attr.aria-label]="i18n.translate('Tipo de vista')">
+  <button id="vGlobe" [attr.aria-pressed]="projection() === 'globe'" (click)="setProjection('globe')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18" />
+    </svg>
+    <span>{{ i18n.translate('Globo') }}</span>
+  </button>
+  <button id="vFlat" [attr.aria-pressed]="projection() === 'mercator'" (click)="setProjection('mercator')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 6.5 9 4l6 2.5L21 4v13.5L15 20l-6-2.5L3 20z" />
+      <path d="M9 4v13.5M15 6.5V20" />
+    </svg>
+    <span>{{ i18n.translate('Mapa') }}</span>
+  </button>
+</div>
+
+<div class="area glass" id="areaChip" [hidden]="!mapbox.areaName()">
+  📍 <span id="areaName">{{ mapbox.areaName() }}</span>
+  <button id="areaX" [attr.aria-label]="i18n.translate('Quitar zona')" (click)="clearArea()">✕</button>
+</div>

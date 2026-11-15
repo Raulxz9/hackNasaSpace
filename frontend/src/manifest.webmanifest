@@ -1,0 +1,30 @@
+{
+  "name": "IRIS - Infrared Remote Incident System",
+  "short_name": "IRIS",
+  "lang": "en",
+  "description": "Global satellite thermal monitoring system with harmonized MODIS + VIIRS data (NASA FIRMS).",
+  "theme_color": "#0B1220",
+  "background_color": "#0B1220",
+  "display": "standalone",
+  "orientation": "any",
+  "scope": "./",
+  "start_url": "./",
+  "icons": [
+    {
+      "src": "assets/iris-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
